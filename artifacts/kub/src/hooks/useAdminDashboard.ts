@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { subscribeByTable } from "@/lib/realtimeTableChannels";
 import { createClient } from "@/lib/supabase/client";
 import { buildRegistrationSeries, type RegistrationPoint } from "@/pages/admin/dashboardModel";
 import type { AuditLog, AuditLogWithActor, Profile } from "@/types/database";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 
 export interface AdminDashboardMetrics {
   totalUsers: number;
@@ -132,19 +134,29 @@ export function useAdminDashboard(): UseAdminDashboardResult {
       if (timer) window.clearTimeout(timer);
       timer = window.setTimeout(() => void refresh(), 450);
     };
-    const channel = supabase
-      .channel("admin-dashboard-v2")
-      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, scheduleRefresh)
-      .on("postgres_changes", { event: "*", schema: "public", table: "bans" }, scheduleRefresh)
-      .on("postgres_changes", { event: "*", schema: "public", table: "mutes" }, scheduleRefresh)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, scheduleRefresh)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chats" }, scheduleRefresh)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "audit_logs" }, scheduleRefresh)
-      .subscribe();
+    // One channel per table. All six bindings used to share a channel, and the
+    // two that cannot be delivered — `chats` and `audit_logs` are not in the
+    // `supabase_realtime` publication — silenced the four that can, so this
+    // dashboard has only ever refreshed on its 30s interval and on window
+    // focus, never on an actual event. A channel that binds an unpublished
+    // table delivers nothing at all while still reporting SUBSCRIBED. See
+    // lib/realtimeTableChannels.ts.
+    const channels = subscribeByTable<typeof scheduleRefresh, RealtimeChannel>(
+      supabase,
+      "admin-dashboard-v2",
+      [
+        { event: "*", schema: "public", table: "profiles", handler: scheduleRefresh },
+        { event: "*", schema: "public", table: "bans", handler: scheduleRefresh },
+        { event: "*", schema: "public", table: "mutes", handler: scheduleRefresh },
+        { event: "INSERT", schema: "public", table: "messages", handler: scheduleRefresh },
+        { event: "INSERT", schema: "public", table: "chats", handler: scheduleRefresh },
+        { event: "INSERT", schema: "public", table: "audit_logs", handler: scheduleRefresh },
+      ],
+    );
 
     return () => {
       if (timer) window.clearTimeout(timer);
-      void supabase.removeChannel(channel);
+      for (const { channel } of channels) void supabase.removeChannel(channel);
     };
   }, [refresh, supabase]);
 

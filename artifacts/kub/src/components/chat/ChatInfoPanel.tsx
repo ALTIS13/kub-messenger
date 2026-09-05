@@ -11,6 +11,7 @@ import { avatarUploadPath, prepareAvatarImage, validateAvatarImage, validateAvat
 import { getChatDisplayInfo } from "@/lib/chatDisplay";
 import { dispatchChatsRefresh, KUB_CHATS_REFRESH_EVENT, type ChatsRefreshDetail } from "@/lib/chatEvents";
 import { requestAppConfirm, showAppAlert } from "@/lib/appDialogs";
+import { subscribeByTable } from "@/lib/realtimeTableChannels";
 import { MediaViewer, type MediaViewerItem } from "./MediaViewer";
 import { GroupInviteModal } from "./GroupInviteModal";
 import { ProfileRoleSummary } from "@/components/profile/ProfileRoleSummary";
@@ -25,6 +26,7 @@ import {
 } from "@/lib/groupInvites";
 import type { GroupInviteStatus, InvitePolicy } from "@/lib/groupInvites";
 import type { ChatWithLastMessage, Profile, Message } from "@/types/database";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { CHAT_NAME_MAX_LENGTH, limitText } from "@/lib/entityLimits";
 import { useMessageMediaVariantUrls, type MessageMediaVariantUrls } from "@/hooks/useMediaVariants";
 import { cacheControlFor } from "@/lib/mediaCacheControl";
@@ -436,15 +438,24 @@ export function ChatInfoPanel({ chat, onClose, onClearForMe }: ChatInfoPanelProp
         dispatchChatsRefresh({ reason: "membership-change", chatId: chat.id });
       }, 150);
     };
-    const channel = supabase
-      .channel(`chat-info:${chat.id}`)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "chats", filter: `id=eq.${chat.id}` }, scheduleRefresh)
-      .on("postgres_changes", { event: "*", schema: "public", table: "chat_members", filter: `chat_id=eq.${chat.id}` }, scheduleRefresh)
-      .on("postgres_changes", { event: "*", schema: "public", table: "group_invites", filter: `chat_id=eq.${chat.id}` }, scheduleRefresh)
-      .subscribe();
+    // One channel per table. These three bindings used to share a channel, and
+    // the `chats` one silenced the other two: `public.chats` is not in the
+    // `supabase_realtime` publication, and a channel that binds an unpublished
+    // table delivers nothing at all while still reporting SUBSCRIBED. So this
+    // panel's member list and its invites have never updated live — they moved
+    // only when the panel was reopened. See lib/realtimeTableChannels.ts.
+    const channels = subscribeByTable<typeof scheduleRefresh, RealtimeChannel>(
+      supabase,
+      `chat-info:${chat.id}`,
+      [
+        { event: "UPDATE", schema: "public", table: "chats", filter: `id=eq.${chat.id}`, handler: scheduleRefresh },
+        { event: "*", schema: "public", table: "chat_members", filter: `chat_id=eq.${chat.id}`, handler: scheduleRefresh },
+        { event: "*", schema: "public", table: "group_invites", filter: `chat_id=eq.${chat.id}`, handler: scheduleRefresh },
+      ],
+    );
     return () => {
       if (timer) window.clearTimeout(timer);
-      void supabase.removeChannel(channel);
+      for (const { channel } of channels) void supabase.removeChannel(channel);
     };
   }, [chat.id, isGroup, loadInvitePolicy, loadInvites, loadMembers, supabase]);
 

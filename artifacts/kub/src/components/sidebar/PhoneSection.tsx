@@ -7,6 +7,8 @@ import { KubBadge, KubButton, KubIcon } from "@/components/kub";
 import { cn } from "@/lib/utils";
 import type { ProfileContact } from "@/types/database";
 import { mapPgError } from "@/lib/errors";
+import { subscribeByTable } from "@/lib/realtimeTableChannels";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 
 const RESEND_WAIT_MS = 120_000;
 const PHONE_FORMAT_HINT = "Введите номер в международном формате, например +79991234567.";
@@ -60,21 +62,35 @@ export function PhoneSection() {
     };
     load();
     // Realtime: another tab or the verified-RPC will UPDATE this row.
-    const ch = supabase
-      .channel(`profile-contacts:${userId}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "profile_contacts", filter: `user_id=eq.${userId}` },
-        (payload) => {
-          const row = payload.new as ProfileContact;
-          setContact(row);
-          if (!editingRef.current) setPhoneInput(row.phone ?? "");
-        }
-      )
-      .subscribe();
+    //
+    // Subscribed one channel per table. Today that is a single binding, so the
+    // grouping changes nothing except the channel's name — but this binding is
+    // on `profile_contacts`, which is not in the `supabase_realtime`
+    // publication, so it delivers nothing at all and the verified state only
+    // appears after a reload. Routing it through the helper means the day a
+    // second binding is added here it cannot be dragged down with this one.
+    // See lib/realtimeTableChannels.ts.
+    const handleContactUpdate = (payload: { new: unknown }) => {
+      const row = payload.new as ProfileContact;
+      setContact(row);
+      if (!editingRef.current) setPhoneInput(row.phone ?? "");
+    };
+    const channels = subscribeByTable<typeof handleContactUpdate, RealtimeChannel>(
+      supabase,
+      `profile-contacts:${userId}`,
+      [
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "profile_contacts",
+          filter: `user_id=eq.${userId}`,
+          handler: handleContactUpdate,
+        },
+      ],
+    );
     return () => {
       cancelled = true;
-      supabase.removeChannel(ch);
+      for (const { channel } of channels) supabase.removeChannel(channel);
     };
   }, [userId, supabase]);
 

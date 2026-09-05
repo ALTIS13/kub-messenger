@@ -11,8 +11,10 @@ import {
   mapRolesPermissionsError,
   setRolesPermissionsEnabled,
 } from "@/lib/rolePermissions";
+import { subscribeByTable } from "@/lib/realtimeTableChannels";
 import { createClient, getRealtimeClient } from "@/lib/supabase/client";
 import type { DynamicRole, Permission, RolePermission, UserGlobalRole } from "@/types/database";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 
 interface UseDynamicRolesOptions {
   enabled?: boolean;
@@ -146,21 +148,35 @@ export function useDynamicRoles(options: UseDynamicRolesOptions = {}): DynamicRo
         void load({ background: true });
       }, 250);
     };
-    const channelName = channelIdRef.current;
-    const channel = rt
-      .channel(channelName)
-      .on("postgres_changes", { event: "*", schema: "public", table: "roles" }, debounced)
-      .on("postgres_changes", { event: "*", schema: "public", table: "permissions" }, debounced)
-      .on("postgres_changes", { event: "*", schema: "public", table: "role_permissions" }, debounced)
-      .on("postgres_changes", { event: "*", schema: "public", table: "user_global_roles" }, debounced)
-      .subscribe((status: string) => {
-        if (import.meta.env.DEV) console.debug("[dynamic-roles]", status);
-      });
-    registerChannel(channelName);
+    // One channel per table. All four bindings used to share a channel, and
+    // `permissions` is the one table of the four that is not in the
+    // `supabase_realtime` publication — which means the channel delivered
+    // nothing at all, not even the `roles` and `user_global_roles` events it
+    // could have, while still reporting SUBSCRIBED. Role changes therefore
+    // reached an open admin screen only on its next manual refetch. Grouped by
+    // table, the inert `permissions` binding can no longer take the other three
+    // with it. See lib/realtimeTableChannels.ts.
+    const baseName = channelIdRef.current;
+    const channels = subscribeByTable<typeof debounced, RealtimeChannel>(
+      rt,
+      baseName,
+      [
+        { event: "*", schema: "public", table: "roles", handler: debounced },
+        { event: "*", schema: "public", table: "permissions", handler: debounced },
+        { event: "*", schema: "public", table: "role_permissions", handler: debounced },
+        { event: "*", schema: "public", table: "user_global_roles", handler: debounced },
+      ],
+      (name, status) => {
+        if (import.meta.env.DEV) console.debug(`[${name}]`, status);
+      },
+    );
+    for (const { name } of channels) registerChannel(name);
     return () => {
       if (timer) window.clearTimeout(timer);
-      rt.removeChannel(channel);
-      unregisterChannel(channelName);
+      for (const { name, channel } of channels) {
+        rt.removeChannel(channel);
+        unregisterChannel(name);
+      }
     };
   }, [available, enabled, load, rt]);
 
