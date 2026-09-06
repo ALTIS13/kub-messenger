@@ -3331,6 +3331,9 @@ weights, and the assembly above it steps down as the page changes.
 **Fixed** by giving `.startup-overlay-status` the startup window's metrics,
 letterspacing included. Re-measured in the same way afterwards: drift `0` on all
 five boxes, state-row delta `0`, and both status lines `19px / 620 / 24px / 12px`.
+Measured again at the 960x640 minimum, where the `max-height` block moves the
+margins on both sides and so is a different sum: state row **122px** against
+**122px**, drift `0` on all five, and nothing clipped on either side.
 
 ## D-055 `[x]` The pane the scene stands on does not exist on the other side
 
@@ -3513,7 +3516,7 @@ was actually looked at.
   So a label that fits in the browser cannot fail in this shell for want of room.
   If anything fails it is the other direction — the overlay is laid out with the
   startup window's constants and set in the wider face — and that was measured
-  too: **zero** clipped labels in the overlay at 1360x860.
+  too: **zero** clipped labels in the overlay, at 1360x860 and at 960x640.
 
   The scene does therefore change typeface at the handoff, and that is a real
   discontinuity, but it is one the CSP decides and not one a stylesheet can fix.
