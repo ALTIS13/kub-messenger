@@ -65,6 +65,11 @@ export function readCacheSubdirectoriesFromRust(repoRoot) {
 ///
 /// `hash: false` skips reading the bytes, which is what a directory only being
 /// watched for accidental change needs.
+///
+/// A path is in this map if it is on disk. Whether its bytes could be read is a
+/// separate question, answered by `unreadable`, because the two are not the
+/// same thing and conflating them is how a relocation that carried every file
+/// came to be reported as one that had lost eight of them.
 export function inventory(root, { hash = true } = {}) {
   const entries = new Map();
   walk(root, "", entries, hash);
@@ -84,18 +89,31 @@ function walk(absolute, relative, entries, hash) {
     const key = relative ? `${relative}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
       walk(child, key, entries, hash);
-    } else if (entry.isFile()) {
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    let size;
+    try {
+      size = statSync(child).size;
+    } catch {
+      // Gone between the listing and the stat. This is the only case in which a
+      // path is left out, and it is the only one that means "not there".
+      continue;
+    }
+    let sha256 = null;
+    let unreadable = false;
+    if (hash) {
       try {
-        entries.set(key, {
-          size: statSync(child).size,
-          sha256: hash
-            ? createHash("sha256").update(readFileSync(child)).digest("hex")
-            : null,
-        });
+        sha256 = createHash("sha256").update(readFileSync(child)).digest("hex");
       } catch {
-        // A file the engine still holds open is not evidence either way.
+        // On disk, and held open by someone else. WebView2 keeps every leveldb
+        // `LOCK` and the cookie store open exactly this way for as long as it
+        // runs, so a measurement taken before it has let go used to report them
+        // as files a move had failed to carry.
+        unreadable = true;
       }
     }
+    entries.set(key, { size, sha256, unreadable });
   }
 }
 
@@ -153,11 +171,38 @@ export function missingOrChanged(before, after) {
   const differences = [];
   for (const [key, value] of before) {
     const other = after.get(key);
-    if (!other) differences.push(`${key} (gone)`);
-    else if (other.size !== value.size) differences.push(`${key} (resized)`);
-    else if (other.sha256 !== value.sha256) differences.push(`${key} (changed)`);
+    if (!other) {
+      differences.push(`${key} (gone)`);
+    } else if (other.size !== value.size) {
+      differences.push(`${key} (resized)`);
+    } else if (other.unreadable || value.unreadable) {
+      // The bytes were never seen on one of the two sides, so nothing can be
+      // claimed about them. The path is there and its length is unchanged, and
+      // calling that a difference would be inventing one.
+      continue;
+    } else if (other.sha256 !== value.sha256) {
+      differences.push(`${key} (changed)`);
+    }
   }
   return differences;
+}
+
+/// Whether every path that was owed reached the destination.
+///
+/// One reading of a move, phrased once. Both the failure a phase reports and
+/// the measurement it records are taken from this, so the run cannot describe
+/// the same relocation two different ways.
+export function arrival(owed, destination) {
+  const missing = owed.filter((key) => !destination.has(key));
+  return {
+    owed: owed.length,
+    missing,
+    complete: missing.length === 0,
+    summary:
+      missing.length === 0
+        ? `all ${owed.length} non-cache paths arrived`
+        : `${owed.length - missing.length} of ${owed.length} non-cache paths arrived and ${missing.length} did not: ${missing.slice(0, 5).join(", ")}`,
+  };
 }
 
 /// Paths in `after` that `before` did not have.
@@ -181,14 +226,23 @@ export function localStorageHoldsOnDisk(profile, needle) {
   } catch {
     return false;
   }
+  const unread = [];
   for (const entry of listing) {
     if (!entry.isFile()) continue;
     try {
       const bytes = readFileSync(path.join(directory, entry.name));
       if (bytes.includes(utf8) || bytes.includes(utf16)) return true;
     } catch {
-      // A file still held open tells us nothing either way.
+      unread.push(entry.name);
     }
+  }
+  if (unread.length > 0) {
+    // "Could not look" is not "not there". Answering `false` here would report
+    // a session lost to a relocation on the strength of a file that was merely
+    // still open, which is the strongest claim this suite makes.
+    throw new Error(
+      `${unread.length} file(s) under ${directory} could not be read (${unread.slice(0, 5).join(", ")}), so whether the session is on disk is unknown rather than false`,
+    );
   }
   return false;
 }

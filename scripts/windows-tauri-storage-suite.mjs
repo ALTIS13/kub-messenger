@@ -22,6 +22,7 @@ import {
   SESSION_SUBDIRECTORIES,
   SETTINGS_FILE,
   added,
+  arrival,
   cacheSubset,
   directories,
   inventory,
@@ -94,16 +95,23 @@ export function buildStorageSuite(repoRoot) {
   /// Where the shell will look for the profile on the next launch.
   const currentProfile = () => readSettings(dataRoot)?.location ?? defaultProfile;
 
+  /// Whether the tree is free of every handle the last client held.
+  ///
+  /// The whole root rather than the current profile: a phase moves the profile,
+  /// so the directory a straggler is holding is not always the one the settings
+  /// now name. Returns the complaint, or `null` when nothing holds it.
+  const stillHeld = () =>
+    waitUntilReleased(dataRoot)
+      ? null
+      : `something still holds a file under ${dataRoot} after 30s; anything measured now would be the harness rather than the product`;
+
   /// Every phase begins by waiting out the previous client's stragglers. A
   /// launch that starts while they still hold the profile cannot open it, and
   /// the relocation it would perform cannot delete the original — which reads
   /// as a product failure and is not one.
   const settleFilesystem = () => {
-    if (!waitUntilReleased(currentProfile())) {
-      fail(
-        `The previous client still holds ${currentProfile()} after 30s; a launch now would measure the harness, not the product.`,
-      );
-    }
+    const held = stillHeld();
+    if (held) fail(`A launch now would measure the harness, not the product: ${held}.`);
   };
 
   const untouched = () => {
@@ -164,14 +172,18 @@ export function buildStorageSuite(repoRoot) {
         // Without this, a profile whose localStorage never reached disk before
         // the process was killed is indistinguishable from a relocation that
         // lost the session — and the wrong one of those is a shipped defect.
-        if (!localStorageHoldsOnDisk(defaultProfile, SESSION_WITNESS)) {
+        const sessionOnDisk = localStorageHoldsOnDisk(defaultProfile, SESSION_WITNESS);
+        if (!sessionOnDisk) {
           problems.push(
             "the session was never committed to disk before the client stopped, so the next phase cannot tell a lost session from an unflushed one",
           );
         }
 
         ledger.notes.push(
-          `source profile: ${ledger.sourceInventory.size} files, ${mib(totalBytes(ledger.sourceInventory))}, of which ${ledger.sessionBefore.size} session files, with the session committed to disk`,
+          `source profile: ${ledger.sourceInventory.size} files, ${mib(totalBytes(ledger.sourceInventory))}, of which ${ledger.sessionBefore.size} session files, ` +
+            (sessionOnDisk
+              ? "with the session committed to disk"
+              : "and the session was NOT committed to disk"),
         );
         ledger.notes.push(...auditCacheList(defaultProfile));
         return problems;
@@ -186,7 +198,8 @@ export function buildStorageSuite(repoRoot) {
       prepare: settleFilesystem,
       verify: () => {
         const problems = untouched();
-        if (existsSync(defaultProfile))
+        const originalRemoved = !existsSync(defaultProfile);
+        if (!originalRemoved)
           problems.push("the original profile still exists after a verified move");
         if (!existsSync(relocatedProfile)) {
           problems.push("the profile was not moved to the recorded location");
@@ -207,12 +220,11 @@ export function buildStorageSuite(repoRoot) {
             !CACHE_SUBDIRECTORIES.some((prefix) => key.startsWith(`${prefix}/`)) &&
             !ENGINE_TRANSIENTS.test(key),
         );
-        const missing = owed.filter((key) => !after.has(key));
-        if (missing.length > 0)
-          problems.push(
-            `the move did not carry ${missing.length} of ${owed.length} non-cache file(s): ${missing.slice(0, 5).join(", ")}`,
-          );
-        if (!localStorageHoldsOnDisk(relocatedProfile, SESSION_WITNESS))
+        const carried = arrival(owed, after);
+        if (!carried.complete)
+          problems.push(`the move did not carry every non-cache file: ${carried.summary}`);
+        const sessionCarried = localStorageHoldsOnDisk(relocatedProfile, SESSION_WITNESS);
+        if (!sessionCarried)
           problems.push(
             "the relocated profile's Local Storage no longer holds the session written before the move",
           );
@@ -225,7 +237,8 @@ export function buildStorageSuite(repoRoot) {
         const rewritten = missingOrChanged(ledger.sourceInventory, after).length;
         ledger.notes.push(
           `moved ${ledger.sourceInventory.size} files (${mib(totalBytes(ledger.sourceInventory))}); ` +
-            `all ${owed.length} non-cache paths arrived and the original was removed; ` +
+            `${carried.summary}, the session ${sessionCarried ? "with them" : "NOT among them"}, ` +
+            `and the original was ${originalRemoved ? "removed" : "LEFT BEHIND"}; ` +
             `${rewritten} files differ afterwards because the engine started on top of them`,
         );
         ledger.sessionBefore = sessionSubset(after);
@@ -270,7 +283,8 @@ export function buildStorageSuite(repoRoot) {
           problems.push(
             `a failed relocation and a runtime cache clear cost ${sessionLost.length} session file(s): ${sessionLost.slice(0, 5).join(", ")}`,
           );
-        if (!after.has(ledger.decoy))
+        const decoyKept = after.has(ledger.decoy);
+        if (!decoyKept)
           problems.push(`clear_cache removed a file outside CACHE_SUBDIRECTORIES: ${ledger.decoy}`);
 
         const settings = readSettings(dataRoot);
@@ -285,7 +299,9 @@ export function buildStorageSuite(repoRoot) {
 
         const survivors = [...ledger.planted.keys()].filter((key) => after.has(key));
         ledger.notes.push(
-          `runtime clear_cache: ${ledger.planted.size - survivors.length}/${ledger.planted.size} planted cache markers removed while the engine held the profile open; all ${ledger.sessionBefore.size} session files survived and the reloaded page was still signed in`,
+          `runtime clear_cache: ${ledger.planted.size - survivors.length}/${ledger.planted.size} planted cache markers removed while the engine held the profile open; ` +
+            `${ledger.sessionBefore.size - sessionLost.length} of ${ledger.sessionBefore.size} session files survived; ` +
+            `the decoy outside the cache list was ${decoyKept ? "kept" : "REMOVED"}`,
         );
         return problems;
       },
@@ -313,7 +329,8 @@ export function buildStorageSuite(repoRoot) {
           problems.push(
             `the launch-time budget check left ${survivors.length} planted cache file(s) in place: ${survivors.slice(0, 5).join(", ")}`,
           );
-        if (!after.has(ledger.decoy))
+        const decoyKept = after.has(ledger.decoy);
+        if (!decoyKept)
           problems.push(
             `the launch-time cache clear reached outside CACHE_SUBDIRECTORIES: ${ledger.decoy}`,
           );
@@ -323,7 +340,10 @@ export function buildStorageSuite(repoRoot) {
             `the launch-time cache clear cost ${sessionLost.length} session file(s): ${sessionLost.slice(0, 5).join(", ")}`,
           );
         ledger.notes.push(
-          `launch-time budget: ${mib(ledger.cacheBefore)} of cache against a ${mib(readSettings(dataRoot)?.cache_limit_bytes ?? 0)} limit reduced to ${mib(totalBytes(cacheSubset(after)))}; every planted file gone, the decoy beside them kept, all ${ledger.sessionBefore.size} session files still there`,
+          `launch-time budget: ${mib(ledger.cacheBefore)} of cache against a ${mib(readSettings(dataRoot)?.cache_limit_bytes ?? 0)} limit reduced to ${mib(totalBytes(cacheSubset(after)))}; ` +
+            `${ledger.planted.size - survivors.length} of ${ledger.planted.size} planted files gone, ` +
+            `the decoy beside them ${decoyKept ? "kept" : "REMOVED"}, ` +
+            `${ledger.sessionBefore.size - sessionLost.length} of ${ledger.sessionBefore.size} session files still there`,
         );
         return problems;
       },
@@ -355,21 +375,20 @@ export function buildStorageSuite(repoRoot) {
             !CACHE_SUBDIRECTORIES.some((prefix) => key.startsWith(`${prefix}/`)) &&
             !ENGINE_TRANSIENTS.test(key),
         );
-        const missing = owed.filter((key) => !destination.has(key));
-        if (missing.length > 0)
-          problems.push(
-            `the second move did not carry ${missing.length} of ${owed.length} non-cache file(s): ${missing.slice(0, 5).join(", ")}`,
-          );
+        const carried = arrival(owed, destination);
+        if (!carried.complete)
+          problems.push(`the second move did not carry every non-cache file: ${carried.summary}`);
         if (settings?.location !== ledger.againTarget)
           problems.push(
             `after a second move the recorded location is ${settings?.location}, expected ${ledger.againTarget}`,
           );
         if (settings?.pending_location != null)
           problems.push(`pending_location was not cleared: ${settings?.pending_location}`);
-        if (!localStorageHoldsOnDisk(ledger.againTarget, SESSION_WITNESS))
-          problems.push("the second move did not carry the session");
+        const sessionCarried = localStorageHoldsOnDisk(ledger.againTarget, SESSION_WITNESS);
+        if (!sessionCarried) problems.push("the second move did not carry the session");
         ledger.notes.push(
-          `second relocation, from a chosen location to another: all ${owed.length} non-cache paths arrived, the session with them`,
+          `second relocation, from a chosen location to another: ${carried.summary}, ` +
+            `the session ${sessionCarried ? "with them" : "NOT among them"}`,
         );
         return problems;
       },
@@ -427,7 +446,7 @@ export function buildStorageSuite(repoRoot) {
         } else if (!sessionKept) {
           ledger.defects.push(
             "a relocation whose settings write fails signs the person out and orphans their profile: " +
-              `all ${arrived} files were moved to ${ledger.orphanTarget}, the settings file could not be updated ` +
+              `${arrived} of ${ledger.beforeOrphan.size} files were moved to ${ledger.orphanTarget}, the settings file could not be updated ` +
               `so it still names ${settings?.location}, and the shell started from that path — which WebView2 ` +
               `recreated empty — the session written before the phase is no longer on disk there, and ` +
               `${sessionLost.length} of ${ledger.sessionBefore.size} session files are gone. ` +
@@ -436,7 +455,7 @@ export function buildStorageSuite(repoRoot) {
         } else {
           ledger.notes.push(
             `an unwritable settings file abandoned the move rather than completing it: ${arrived} of ${ledger.beforeOrphan.size} files reached the target as a duplicate, ` +
-              `the settings still name ${settings?.location}, and all ${ledger.sessionBefore.size} session files stayed there with the person signed in` +
+              `the settings still name ${settings?.location}, and ${ledger.sessionBefore.size - sessionLost.length} of ${ledger.sessionBefore.size} session files stayed there with the session on disk` +
               (copied ? "" : " (the copy did not finish either)"),
           );
         }
@@ -446,7 +465,20 @@ export function buildStorageSuite(repoRoot) {
   ];
 
   return {
-    scenarios,
+    // Wrapped here rather than at each call site so a phase added later cannot
+    // forget it. `prepare` has always waited for the last client to let go;
+    // `verify` never did, and ran 500ms after a `taskkill` whether or not the
+    // engine had finished dying. That asymmetry is the whole reason one phase
+    // could count a file and the next report it as one a move had lost.
+    scenarios: scenarios.map((scenario) => ({
+      ...scenario,
+      verify: scenario.verify
+        ? () => {
+            const held = stillHeld();
+            return held ? [held] : scenario.verify();
+          }
+        : undefined,
+    })),
     async finish() {
       console.log("\n[windows-tauri-qa] storage measurements");
       for (const note of ledger.notes) console.log(`  - ${note}`);

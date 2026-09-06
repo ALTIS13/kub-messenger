@@ -3549,6 +3549,23 @@ before any change here, and it belongs to whoever owns
 `scripts/windows-tauri-storage-suite.mjs`. Recorded because it was observed;
 nothing about it was changed.
 
+**Closed on 2026-09-06. Neither statement was a measurement of what it claimed,
+and the files were never lost.** `inventory()` hashed every file it listed and
+silently dropped the ones it could not open, so "not readable at this instant"
+and "not on disk" were the same answer. WebView2 holds exactly eleven files
+unshared for as long as it runs — nine leveldb `LOCK`s, `Network/Cookies` and
+`Network/Cookies-journal` — and `verify` ran 500ms after a `taskkill` without
+ever checking that the engine had let go, while `prepare` had always waited for
+it. Measured against a live profile: 174 paths on disk, the old reading reports
+`163 of 174 arrived and 11 did not` naming that family, every one of the eleven
+present on disk, and all eleven readable again 264ms after the process dies. The
+note beside it was unconditional prose — `all ${owed.length} … arrived` was
+pushed whatever the check had just found, so it could not be false and said
+nothing. Fixed in the harness: an inventory now records a file it can see but
+cannot read and marks it, every phase settles the whole data root before it
+measures, and each move is read once by `arrival()` which words both the failure
+and the note. The suite passes 6/6 phases with `all 154 non-cache paths arrived`.
+
 ## Where this evidence is
 
 The probes are in the ignored `output/windows-shell-audit/`: `launch.mjs`, which

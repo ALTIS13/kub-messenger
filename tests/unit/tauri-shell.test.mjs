@@ -1215,6 +1215,157 @@ test("the Windows cache list the harness measures is the list the shell clears",
   }
 });
 
+/* The storage suite once reported, in one run, that a relocation had left eight
+ * of 154 files behind and that all 154 had arrived. Neither sentence was a
+ * measurement of what it claimed: the failure came from an inventory that threw
+ * away every file it could not open, and the note was prose that said "all"
+ * whatever the failure had just found. These four hold both halves shut. */
+
+test(
+  "an inventory records a file it can see but cannot read",
+  { skip: process.platform !== "win32" ? "only Windows opens files unshared" : false },
+  async () => {
+    const { inventory, localStorageHoldsOnDisk } = await import(
+      "../../scripts/windows-tauri-storage.mjs"
+    );
+    const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import("node:fs");
+    const { spawn } = await import("node:child_process");
+    const os = await import("node:os");
+
+    // A leveldb `LOCK` is opened with no sharing at all for as long as the
+    // engine runs, and the cookie store with it. This is that, exactly.
+    const root = mkdtempSync(path.join(os.tmpdir(), "letscube-inventory-test-"));
+    const leveldb = path.join(root, "EBWebView/Default/Local Storage/leveldb");
+    mkdirSync(leveldb, { recursive: true });
+    writeFileSync(path.join(leveldb, "000003.log"), "a session would live in here");
+    const held = path.join(leveldb, "LOCK");
+    writeFileSync(held, "");
+
+    const holder = spawn(
+      "pwsh",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-Command",
+        `$s=[System.IO.File]::Open('${held.replaceAll("\\", "\\\\")}','Open','ReadWrite','None');` +
+          "Write-Output HELD; Start-Sleep -Seconds 30; $s.Close()",
+      ],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    try {
+      await new Promise((resolve, reject) => {
+        holder.on("error", reject);
+        holder.stdout.on("data", (chunk) => {
+          if (String(chunk).includes("HELD")) resolve();
+        });
+      });
+
+      const entries = inventory(leveldb);
+      assert.ok(
+        entries.has("LOCK"),
+        "a file that is on disk must be in the inventory whether or not its bytes could be read",
+      );
+      assert.equal(entries.get("LOCK").unreadable, true, "and must say that they could not");
+      assert.equal(entries.get("LOCK").sha256, null);
+      assert.equal(entries.get("000003.log").unreadable, false);
+      assert.notEqual(entries.get("000003.log").sha256, null);
+
+      // The suite's strongest instrument. A held file makes the answer unknown,
+      // and reporting a lost session on that basis is the failure this replaces.
+      assert.throws(
+        () => localStorageHoldsOnDisk(root, "__letscubeStorageQaMarker"),
+        /unknown rather than false/,
+      );
+    } finally {
+      holder.kill();
+      for (let attempt = 0; attempt < 20 && existsSync(root); attempt += 1) {
+        try {
+          rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+        } catch {
+          // The holder may not be gone yet.
+        }
+        if (!existsSync(root)) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+  },
+);
+
+test("a byte comparison does not invent a difference it never saw", async () => {
+  const { missingOrChanged } = await import("../../scripts/windows-tauri-storage.mjs");
+  const before = new Map([["LOCK", { size: 0, sha256: "abc", unreadable: false }]]);
+
+  assert.deepEqual(
+    missingOrChanged(before, new Map([["LOCK", { size: 0, sha256: null, unreadable: true }]])),
+    [],
+    "bytes that could not be read are unknown, not changed",
+  );
+  assert.deepEqual(
+    missingOrChanged(before, new Map([["LOCK", { size: 1, sha256: null, unreadable: true }]])),
+    ["LOCK (resized)"],
+    "a length is still a fact about a file nobody could open",
+  );
+  assert.deepEqual(missingOrChanged(before, new Map()), ["LOCK (gone)"]);
+  assert.deepEqual(
+    missingOrChanged(before, new Map([["LOCK", { size: 0, sha256: "def", unreadable: false }]])),
+    ["LOCK (changed)"],
+  );
+});
+
+test("a relocation is read once, so a failure and a measurement cannot disagree", async () => {
+  const { arrival } = await import("../../scripts/windows-tauri-storage.mjs");
+  const owed = ["Network/Cookies", "Session Storage/LOCK", "Local Storage/leveldb/CURRENT"];
+
+  const whole = arrival(owed, new Map(owed.map((key) => [key, {}])));
+  assert.equal(whole.complete, true);
+  assert.equal(whole.summary, "all 3 non-cache paths arrived");
+
+  const short = arrival(owed, new Map([["Local Storage/leveldb/CURRENT", {}]]));
+  assert.equal(short.complete, false);
+  assert.deepEqual(short.missing, ["Network/Cookies", "Session Storage/LOCK"]);
+  assert.doesNotMatch(
+    short.summary,
+    /\ball 3\b/,
+    "the sentence a passing run prints must not be reachable from a failing one",
+  );
+  assert.match(short.summary, /1 of 3 non-cache paths arrived and 2 did not/);
+});
+
+test("no storage measurement can assert a verdict its own phase could contradict", () => {
+  const suite = readText("scripts/windows-tauri-storage-suite.mjs");
+
+  // "all ${n}" is a claim of completeness with a number pasted into it, which
+  // is what the note said while the failure beside it named eight missing
+  // files. Only `arrival` may say "all", and only when it has just counted.
+  assert.doesNotMatch(
+    suite,
+    /\ball \$\{/,
+    "a phase must report the count it measured rather than assert completeness",
+  );
+  // The harness cannot see the window, so it may not report on it: `verify`
+  // runs even when the phase's spec failed.
+  assert.doesNotMatch(suite, /signed in/);
+  for (const phase of ["the move did not carry", "the second move did not carry"]) {
+    assert.ok(
+      suite.includes(`${phase} every non-cache file: \${carried.summary}`),
+      `${phase} must be worded from the same reading as its note`,
+    );
+  }
+  assert.equal(
+    [...suite.matchAll(/\$\{carried\.summary\}/g)].length,
+    4,
+    "each of the two moves states its one reading twice: once as a failure, once as a measurement",
+  );
+
+  // And the reading itself must be taken from a tree nothing is still holding,
+  // which is what `prepare` always did and `verify` never did.
+  assert.match(
+    suite,
+    /scenarios: scenarios\.map\(\(scenario\) => \(\{[\s\S]*?const held = stillHeld\(\);\s*return held \? \[held\] : scenario\.verify\(\);/,
+    "every phase's verify must settle the tree first, and not by remembering to",
+  );
+});
+
 test("Windows update UI contract confirms Test to Stable reversal", () => {
   const spec = readText("tests/e2e/windows-tauri-shell.spec.ts");
 
