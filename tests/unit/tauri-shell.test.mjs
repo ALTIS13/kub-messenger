@@ -1118,6 +1118,24 @@ test("Windows Tauri QA wrapper owns an isolated process, profile and loopback CD
   assert.match(script, /cleanupOwnedResources/);
   assert.match(script, /process\.exitCode\s*=\s*1/);
   assert.match(script, /existsSync\(profilePath\)/);
+
+  // WebView2 holds the profile open past the death of the shell that owned it,
+  // and the removal used to give up after about three seconds — so a suite whose
+  // every scenario passed still exited non-zero, two runs in three. The wait is
+  // bounded so a genuine leak is still reported, and it has to say what held it.
+  assert.match(script, /PROFILE_REMOVAL_TIMEOUT_MS = \d[\d_]*/);
+  const removal = script.match(/async function removeProfile[\s\S]*?\n}\n/)?.[0] ?? "";
+  assert.match(removal, /Date\.now\(\) >= deadline/, "the wait must be bounded");
+  assert.match(removal, /lastError\?\.code/, "a leak must name what still held the profile");
+  assert.doesNotMatch(
+    removal,
+    /attempt < \d+/,
+    "a fixed attempt count is what made the gate fail for something that is not the product",
+  );
+  // The reader of a failed cleanup must be told which half failed.
+  const cleanup = script.match(/scenario\.cleanupPromise = \(async \(\)[\s\S]*?\n  \}\)\(\);/)?.[0] ?? "";
+  assert.match(cleanup, /is still running/);
+  assert.match(cleanup, /could not be removed/);
   assert.doesNotMatch(script, /remote-allow-origins=\*/);
 
   const spec = readText("tests/e2e/windows-tauri-shell.spec.ts");
@@ -1202,11 +1220,57 @@ test("Windows lifecycle fixtures are deterministic and cleanup remains single-fl
   );
 });
 
+test("an isolated QA launch runs under its own single-instance identity", () => {
+  const wrapper = readText("scripts/windows-tauri-qa.mjs");
+  const libRs = readText("windows-tauri/src-tauri/src/lib.rs");
+  const tauriConfig = readJson("windows-tauri/src-tauri/tauri.conf.json");
+
+  // The harness has to hand the flag to the client it launches, and only to
+  // that client: the Playwright process has no identity to isolate.
+  assert.match(
+    wrapper,
+    /const clientEnv = \{[\s\S]*?\[isolatedIdentityFlag\]: "1",[\s\S]*?\};/,
+    "the launched client must be told to take the isolated identity",
+  );
+  assert.match(wrapper, /isolatedIdentityFlag = "LETSCUBE_TAURI_QA_ISOLATED_IDENTITY"/);
+  assert.doesNotMatch(
+    wrapper,
+    /qaEnv\.LETSCUBE_TAURI_QA_ISOLATED_IDENTITY/,
+    "only the shell has an identity to move",
+  );
+
+  // The shipped identity is what the installer, the toast AUMID and every
+  // installed client already hold; the QA suffix must never reach it.
+  assert.equal(tauriConfig.identifier, "ru.letscube.messenger");
+  assert.match(
+    libRs,
+    /#\[cfg\(debug_assertions\)\]\s*fn qa_wants_isolated_identity\(\)[\s\S]*?LETSCUBE_TAURI_QA_ISOLATED_IDENTITY/,
+    "the isolation seam must compile only in debug builds",
+  );
+  assert.doesNotMatch(
+    libRs,
+    /#\[cfg\(not\(debug_assertions\)\)\][\s\S]{0,200}qa_wants_isolated_identity/,
+    "a release build must not compile a way to rename itself",
+  );
+
+  // The plugin reads the identifier in its own setup, so the rename has to land
+  // on the context before the builder is ever run.
+  assert.match(
+    libRs,
+    /let mut context = tauri::generate_context!\(\);[\s\S]{0,700}?#\[cfg\(debug_assertions\)\]\s*if qa_wants_isolated_identity\(\) \{[\s\S]{0,300}?context\.config_mut\(\)\.identifier = isolated;/,
+    "the identifier must be replaced before the builder consumes the context",
+  );
+  assert.match(libRs, /\.run\(context\)/);
+  assert.doesNotMatch(
+    libRs,
+    /\.run\(tauri::generate_context!\(\)\)/,
+    "a second context would discard the rename",
+  );
+});
+
 test("Windows lifecycle wrapper owns a profile before either child can exist", () => {
   const wrapper = readText("scripts/windows-tauri-qa.mjs");
-  const scenarioSetup = wrapper.match(
-    /async function runScenario[\s\S]*?(?=\nfunction runningClientImage)/,
-  )?.[0] ?? "";
+  const scenarioSetup = wrapper.match(/async function runScenario[\s\S]*?\n}\n/)?.[0] ?? "";
   assert.notEqual(scenarioSetup, "", "runScenario must remain the scenario entry point");
 
   assert.match(
@@ -1222,7 +1286,7 @@ test("Windows lifecycle wrapper owns a profile before either child can exist", (
 test("Windows lifecycle spec observes real native updater UI and all startup text geometry", () => {
   const spec = readText("tests/e2e/windows-tauri-startup.spec.ts");
 
-  assert.match(spec, /loginAsRoleOrSkip/);
+  assert.match(spec, /loadQaCredentials/);
   assert.match(spec, /desktop-update-pill/);
   assert.match(spec, /desktop-critical-update-gate/);
   assert.match(spec, /startup-client-fingerprint.*span/);
@@ -1233,6 +1297,70 @@ test("Windows lifecycle spec observes real native updater UI and all startup tex
   assert.match(spec, /\.endpoint-server p/);
   assert.match(spec, /\.stages li/);
   assert.match(spec, /startup-offline-retry-\$\{viewport\.width\}x\$\{viewport\.height\}/);
+});
+
+test("the update interface is measured on the built bundle, not on the deployment", () => {
+  const spec = readText("tests/e2e/windows-tauri-startup.spec.ts");
+  const helper = readText("tests/e2e/helpers/local-frontend.ts");
+  const shellSpec = readText("tests/e2e/windows-tauri-shell.spec.ts");
+
+  // The failure this pins: the interface assertions ran inside the native
+  // WebView pointed at https://app.letscube.ru, so they measured the last
+  // deployment. A local regression stayed green while both the source and the
+  // built bundle changed SHA-256.
+  assert.match(helper, /artifacts", "kub", "dist", "public/);
+  assert.match(spec, /startLocalFrontendServer/);
+  assert.match(shellSpec, /from "\.\/helpers\/local-frontend"/);
+  assert.doesNotMatch(
+    shellSpec,
+    /^async function startLocalFrontendServer/m,
+    "one static server, shared, or the two specs drift apart",
+  );
+
+  const measuredLocally =
+    spec.match(
+      /async function assertBuiltInterfaceHonoursNativeState[\s\S]*?\n}\n/,
+    )?.[0] ?? "";
+  assert.notEqual(measuredLocally, "", "the built-bundle assertion block must remain findable");
+  assert.match(measuredLocally, /startLocalFrontendServer\(\)/);
+  assert.match(measuredLocally, /page\.goto\(`\$\{localFrontend\.url\}/);
+
+  // Every interface contract has to sit inside that block, and nowhere else in
+  // the spec — anywhere else in this file is a page attached to the shell.
+  // Counted as queries rather than as text, so naming one in a comment is not
+  // mistaken for asserting it.
+  for (const contract of [
+    "desktop-critical-update-gate",
+    "desktop-critical-update-install",
+    "desktop-update-pill",
+    "desktop-app-shell",
+  ]) {
+    const queried = new RegExp(`getByTestId\\("${contract}"\\)`, "g");
+    const inBlock = [...measuredLocally.matchAll(queried)].length;
+    assert.ok(inBlock > 0, `${contract} must be measured against the built bundle`);
+    assert.equal(
+      [...spec.matchAll(queried)].length,
+      inBlock,
+      `${contract} is still queried outside the built-bundle block`,
+    );
+  }
+
+  // The state is the shell's, not a literal: that join is the reason the
+  // scenario is worth running at all.
+  assert.match(
+    spec,
+    /window\.letscubeDesktop\?\.getUpdateState\(\)[\s\S]{0,400}?assertBuiltInterfaceHonoursNativeState\(browser, nativeBridge/,
+    "the built interface must be served the state the native shell just produced",
+  );
+  assert.doesNotMatch(
+    measuredLocally,
+    /critical_update_required|"0\.3\.0"|"0\.2\.1"/,
+    "re-declaring the fixture here would test the spec against itself",
+  );
+
+  // What stays on production, named so it is visible which is which.
+  assert.match(spec, /url\.origin === PRODUCTION_ORIGIN/);
+  assert.match(spec, /data-kub-boot-id/);
 });
 
 test("Windows storage QA owns a data root instead of the user's own AppData", () => {
@@ -1276,8 +1404,20 @@ test("Windows storage QA owns a data root instead of the user's own AppData", ()
     /if \(dataRoot\) \{[\s\S]*?delete clientEnv\.LETSCUBE_WEBVIEW2_DATA_DIR;/,
     "pinning the profile would step over the very code the suite exists to run",
   );
-  assert.match(wrapper, /conflictingImages/);
-  assert.match(wrapper, /"LETSCUBE\.exe"/, "a running release client shares the single-instance identity");
+  // The installed client is `letscube-windows-tauri.exe` too — `productName`
+  // names the installer and the shortcut, not the binary — so the refusal has
+  // to compare the executable's path, or it refuses whenever LETSCUBE is open.
+  assert.match(wrapper, /function runningIsolatedQaClient/);
+  assert.match(
+    wrapper,
+    /path\.resolve\(candidate\)\.toLowerCase\(\) === target/,
+    "a running client is only a conflict when it is this build",
+  );
+  assert.doesNotMatch(
+    wrapper,
+    /IMAGENAME eq \$\{image\}|conflictingImages/,
+    "an image-name check cannot tell the installed client from the QA build",
+  );
   assert.match(
     wrapper,
     /let failures = \[\];[\s\S]*?if \(scenario\.verify\)/,

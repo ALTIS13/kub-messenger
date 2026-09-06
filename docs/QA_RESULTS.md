@@ -1,5 +1,148 @@
 # QA Results
 
+## 2026-09-06 - The Windows QA gate, repaired: it now looks at the build under test, and runs beside the installed client
+
+Two weaknesses found while cutting 0.2.13 and 0.2.14. Neither is in the product;
+both are in the gate. They are recorded in the 0.2.13 entry below, and this is
+their repair.
+
+### The interface was measured on production, not on the build
+
+`windows-tauri-startup.spec.ts` drove the native shell to
+`https://app.letscube.ru` and then asserted the update interface there — the
+critical gate, `inert` on `desktop-app-shell`, the install button, the pill's
+box. Production serves whatever was deployed last, so those assertions answered
+a question about somebody else's build: a regression in the working tree stayed
+green, and another track's deploy could redden the gate with nothing here
+changed.
+
+The interface assertions now run against `artifacts/kub/dist/public`, served by
+`tests/e2e/helpers/local-frontend.ts` — one static server, shared with
+`windows-tauri-shell.spec.ts`, which had its own copy. The state is not
+re-invented there: the scenario reads `getUpdateState()`, `version` and `build`
+back out of the running shell and serves exactly that to the built bundle
+through the bridge shape the shell installs. So what is proven is the join the
+release cares about — given the state this native build reports, the interface
+this checkout builds gates the shell.
+
+What stays on production is named in the spec as such: the handover to the real
+origin, one WebView, the mounted deployment (`data-kub-boot-id` and a non-empty
+`#root`), the stage sequence and the bridge's own reported state.
+
+**Proven by mutation, hashing source and built bundle before and after** —
+because that is exactly what the old gate survived.
+
+| | `MainLayout.tsx` | `dist/public` tree | `assets/index-*.js` |
+|---|---|---|---|
+| baseline | `92a4bb39…1ddea5` | `11f91eaf…bfc825` | `index-THKEns-d.js` `9d216f4a…8af4e9` |
+| `inert` removed | `63cb0ad8…13e6c8` | `cecf1a9b…eb84b8` | `index-Bw54UY3s.js` `6032b61e…81e808d` |
+| `inert={true}` always | `591bf78f…d13e44` | `21928f92…526e03` | `index-CDqd_tEf.js` `0a42af71…c65e06` |
+| reverted | `92a4bb39…1ddea5` | `11f91eaf…bfc825` | `index-THKEns-d.js` `9d216f4a…8af4e9` |
+
+- Removing `inert` reddened `critical_update` on
+  `expect(appShell).toHaveAttribute("inert", "")` — the assertion the mutation
+  broke. Under the old gate this same mutation left the scenario green.
+- Forcing `inert` on always reddened `normal_update` on
+  `not.toHaveAttribute("inert", "")`, so that scenario reads the built bundle
+  too. Its first attempt failed earlier, at a stalled sign-in, and was rerun
+  rather than counted: a red at the wrong line proves nothing.
+- Both reverted; all three hashes returned to the baseline row and
+  `git status artifacts/` is clean.
+
+### The gate could not run while LETSCUBE was open
+
+`tauri-plugin-single-instance` names its mutex, window class and window after
+`config.identifier` and has no Windows-side override — only a Linux `dbus_id`.
+The QA build and the installed client were therefore one instance to Windows,
+and the harness refused to start rather than hand the launch to the installed
+client. That stopped two releases and needed the owner each time.
+
+The isolated QA launch now renames its own identity to
+`ru.letscube.messenger.qa`, applied to the context before the builder consumes
+it, behind two gates: `#[cfg(debug_assertions)]`, so the branch does not exist
+in a release build, and `LETSCUBE_TAURI_QA_ISOLATED_IDENTITY=1`, which only the
+harness sets — so `tauri dev` keeps the shipped identity and a developer's own
+profile.
+
+What the identifier reaches, checked rather than assumed:
+
+- single-instance mutex/class/window — the point of the change.
+- `%LOCALAPPDATA%\<identifier>`, through `app_local_data_dir()`. This is a
+  second, unlooked-for repair: until now every QA run wrote its
+  `updater-channel.json` and `node-trust.json` into the *installed client's*
+  own directory.
+- Not the toast AUMID: `WINDOWS_APP_ID` is a separate hardcoded constant, so
+  notifications and `clear_legacy_windows_message_notifications()` are
+  unchanged. Left deliberately — a QA build that clears the installed client's
+  toast history is a real bleed, but moving the AUMID is a notification-routing
+  change and belongs to its own task.
+- Not the `letscube-notification` scheme: the deep-link plugin only ever names
+  the identifier in a registry *description*, and `register_all()` is never
+  called — the installer owns that key.
+- Not the updater endpoint, its signing key, or the tray, which is per-process.
+
+**A wrong fact, corrected by measurement.** The harness listed `LETSCUBE.exe`
+beside the debug image as "a running release client shares the single-instance
+identity". There is no such process: `productName` names the installer, the
+shortcut and the install directory, and the installed binary is
+`C:\Users\maksi\AppData\Local\LETSCUBE\letscube-windows-tauri.exe` — the *same
+image name* as the QA build. So that entry had never matched anything, and what
+actually refused every run was the image name they share. Renaming the identity
+alone would not have helped; the check now compares the executable's resolved
+path through `Get-CimInstance Win32_Process`, and refuses only a second isolated
+QA client, which does share the suffixed identity and holds the file cargo is
+about to relink.
+
+Verified live: with the installed client running (its PID and path confirmed),
+`pnpm.cmd windows:tauri:qa` ran to completion and exited 0 — `baseline` 3/3 plus
+`success`, `offline`, `catalog_failure`, `normal_update`, `critical_update`.
+
+### A third thing, found on the way: the gate failed for something that is not the product
+
+Every scenario ended with `Windows Tauri QA cleanup did not complete safely.`
+and the harness exited 1 even when all six scenarios passed. Confirmed
+pre-existing by stashing the whole change and running the unchanged harness with
+no client running at all: two runs in three reported it. The cause is not a
+leak. WebView2's browser process outlives the shell it belongs to — it is not in
+the tree `taskkill /T` walks — and holds files inside the temporary profile
+open; the removal gave up after four attempts over about three seconds, and
+every one of those profiles deleted by hand a minute later. The wait is now
+bounded at 45s and reports what still held the directory, and the cleanup
+message names which half failed instead of leaving a reader hunting for a
+surviving process. Three consecutive runs afterwards: clean, no leftovers under
+`%TEMP%`.
+
+### Gates at this change
+
+- `pnpm.cmd windows:tauri:qa`: exit 0, `baseline` 3/3 plus five lifecycle
+  scenarios, with the installed client running.
+- `pnpm.cmd windows:tauri:qa:storage`: all six phases green, isolated root
+  removed. Its first run failed on `the user's own profile lost or changed
+  files`, naming `webview-production-v1/…/Preferences`, `History-journal` and
+  three more — the installed client flushing on shutdown seconds earlier,
+  because it had just been closed. Re-run once its processes were gone: clean.
+  Worth knowing before reading that guard as a defect.
+- `node --test tests/unit/*.mjs tests/unit/*.mts`: 1383/1383.
+- `cargo test`: 55/55. `cargo check --release`: clean, so the release profile
+  still compiles the isolation branch out entirely.
+- `pnpm.cmd --filter @workspace/kub run typecheck`: clean.
+  `pnpm.cmd windows:tauri:test`: 26/26. `git diff --check`: clean.
+- The four new unit contracts were themselves mutation-checked: dropping the
+  isolated-identity flag from `clientEnv`, restoring the fixed attempt count in
+  `removeProfile`, pointing the built-bundle block back at `PRODUCTION_ORIGIN`,
+  and disabling the rename in `lib.rs` each turn their test red, and each was
+  reverted.
+
+### Prerequisite that cost time again
+
+`artifacts/kub/dist` had been rebuilt without `VITE_SUPABASE_URL` /
+`VITE_SUPABASE_ANON_KEY`, so the local bundle rendered "Подключение к серверу не
+настроено" and no login form appeared. This is the third time it has cost a
+session. The configuration was recovered from the deployed bundle — the anon key
+is a public value embedded in `https://app.letscube.ru/assets/index-*.js`, and
+every JWT found there was decoded and checked to carry `role: anon` before being
+used. The Supabase host is `https://core.letscube.ru`, not `api.letscube.ru`.
+
 ## 2026-09-06 - Windows 0.2.14 Stable release, and the defect QA caught before it shipped
 
 Cut `0.2.14` / `desktopBuild` 18 for the reworked connection channel: `a3c5993`
@@ -133,7 +276,11 @@ screen with no session behind it.
 
 Two things worth recording rather than rediscovering:
 
-- A mutation aimed at the gate's UI proves nothing here. `windows-tauri-startup.spec.ts`
+- **Superseded on 2026-09-06 — see the gate-repair entry at the top of this
+  file. The interface assertions now run against the built bundle, and the
+  mutation described here as proving nothing does turn `critical_update` red.**
+  As it stood then: a mutation aimed at the gate's UI proves nothing here.
+  `windows-tauri-startup.spec.ts`
   drives the shell to `https://app.letscube.ru`, not to `artifacts/kub/dist/public`,
   so editing `MainLayout.tsx` and rebuilding the local bundle left the scenario
   green while looking like a mutation that had been applied. Only `baseline`

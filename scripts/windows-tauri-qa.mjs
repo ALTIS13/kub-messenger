@@ -26,10 +26,13 @@ const executablePath = path.join(
 );
 const cargoPath = path.join(os.homedir(), ".cargo", "bin", "cargo.exe");
 const processImage = "letscube-windows-tauri.exe";
-// The installed client shares this shell's single-instance identity, so a
-// running release build would swallow the QA launch and leave the suite waiting
-// on a window that was never built.
-const conflictingImages = Object.freeze([processImage, "LETSCUBE.exe"]);
+// The debug shell takes its own single-instance identity when this is set, so
+// the installed client is no longer this launch's twin and no longer has to be
+// closed first. Refusing to run while LETSCUBE was open stopped two releases.
+const isolatedIdentityFlag = "LETSCUBE_TAURI_QA_ISOLATED_IDENTITY";
+/// How long the engine is given to release the scenario's profile. See
+/// `removeProfile`; the old three seconds failed most runs on this workstation.
+const PROFILE_REMOVAL_TIMEOUT_MS = 45_000;
 const lifecycleModes = Object.freeze([
   "success",
   "offline",
@@ -65,10 +68,9 @@ if (requestedSuite !== "standard" && requestedMode) {
   );
   process.exit(1);
 }
-const running = runningClientImage();
-if (running) {
+if (runningIsolatedQaClient()) {
   console.error(
-    `Close the running ${running} before starting isolated Tauri QA.`,
+    `Close the running isolated QA client (${executablePath}) before starting another.`,
   );
   process.exit(1);
 }
@@ -175,6 +177,7 @@ async function runScenario({ name, mode, spec, dataRoot, phase }) {
       ...process.env,
       LETSCUBE_WEBVIEW2_DEBUG_PORT: String(debugPort),
       LETSCUBE_TAURI_QA_HOLD_PREFLIGHT: "1",
+      [isolatedIdentityFlag]: "1",
     };
     if (dataRoot) {
       // Pinning the profile would step straight over the relocation code, so
@@ -233,21 +236,48 @@ async function runScenario({ name, mode, spec, dataRoot, phase }) {
   }
 }
 
-function runningClientImage() {
-  for (const image of conflictingImages) {
+/// Whether another copy of *this* executable is already running.
+///
+/// It has to be this executable rather than this image name. The installed
+/// client is also called `letscube-windows-tauri.exe` — `productName` names the
+/// installer, the shortcut and the install directory, never the binary — so an
+/// image-name check could not tell the two apart, and a `LETSCUBE.exe` entry
+/// that had been added beside it to catch the installed client had in fact
+/// never matched anything. What actually refused every run started while
+/// LETSCUBE was open was the image name they share, and that stopped the 0.2.13
+/// and 0.2.14 releases until someone closed the application by hand.
+///
+/// Now that the QA launch renames its own single-instance identity, the
+/// installed client is no longer a conflict at all. A second isolated QA client
+/// still is: it takes the same suffixed identity, and it holds the very file
+/// cargo is about to relink.
+///
+/// A path is only obtainable per process, so this asks CIM rather than
+/// `tasklist`. If that cannot be asked, the run continues: this check exists to
+/// replace a confusing linker error with a clear sentence, not to be a gate of
+/// its own.
+function runningIsolatedQaClient() {
+  const target = path.resolve(executablePath).toLowerCase();
+  const script =
+    `Get-CimInstance Win32_Process -Filter "Name='${processImage}'" |` +
+    " ForEach-Object { $_.ExecutablePath }";
+  for (const shell of ["pwsh.exe", "powershell.exe"]) {
     const result = spawnSync(
-      "tasklist.exe",
-      ["/FI", `IMAGENAME eq ${image}`, "/FO", "CSV", "/NH"],
+      shell,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
       { encoding: "utf8" },
     );
-    if (
-      result.status === 0 &&
-      result.stdout.toLowerCase().includes(image.toLowerCase())
-    ) {
-      return image;
-    }
+    if (result.error || result.status !== 0) continue;
+    return result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .some((candidate) => path.resolve(candidate).toLowerCase() === target);
   }
-  return null;
+  console.warn(
+    "[windows-tauri-qa] Could not list running processes; a second QA client would surface as a link failure.",
+  );
+  return false;
 }
 
 function reserveLoopbackPort() {
@@ -287,13 +317,23 @@ async function cleanupOwnedResources(scenario) {
 
   scenario.cleanupPromise = (async () => {
     const { qaProcess, client, profilePath } = scenario;
-    let clean = await terminateOwnedProcess(qaProcess);
-    clean = (await terminateOwnedProcess(client)) && clean;
+    // Named, because "cleanup did not complete safely" on its own sent a reader
+    // looking for a surviving process when what had actually happened was a
+    // profile the engine had not finished letting go of.
+    const unfinished = [];
+    if (!(await terminateOwnedProcess(qaProcess)))
+      unfinished.push(`the Playwright process (pid ${qaProcess?.pid}) is still running`);
+    if (!(await terminateOwnedProcess(client)))
+      unfinished.push(`the QA client (pid ${client?.pid}) is still running`);
     // A shared data root outlives its scenarios; its owner removes it.
-    if (profilePath) clean = (await removeProfile(profilePath)) && clean;
-    if (!clean)
-      console.error("Windows Tauri QA cleanup did not complete safely.");
-    return clean;
+    if (profilePath && !(await removeProfile(profilePath)))
+      unfinished.push(`the temporary profile ${profilePath} could not be removed`);
+    if (unfinished.length > 0) {
+      console.error(
+        `Windows Tauri QA cleanup did not complete safely: ${unfinished.join("; ")}.`,
+      );
+    }
+    return unfinished.length === 0;
   })();
   return scenario.cleanupPromise;
 }
@@ -307,8 +347,24 @@ async function terminateOwnedProcess(child) {
   return !isPidRunning(child.pid);
 }
 
+/// Removes the scenario's temporary profile once the engine has let go of it.
+///
+/// WebView2 outlives the shell it belongs to by a moment — its browser process
+/// is not in the tree `taskkill /T` walks — and while it lives it holds files
+/// inside the profile open. Four attempts over about three seconds were not
+/// enough for it: measured on this workstation, two runs in three ended with
+/// "cleanup did not complete safely" and every one of those profiles deleted by
+/// hand a minute later. Nothing had leaked; the wait was simply too short. It
+/// still set the exit code, so `windows:tauri:qa` reported failure after a suite
+/// whose every scenario had passed — a gate failing for something that is not
+/// the product, which is the fault this whole change is about.
+///
+/// Bounded rather than unbounded: a profile that is still there after the
+/// deadline is a real leak and has to be said out loud, with the reason.
 async function removeProfile(profilePath) {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  const deadline = Date.now() + PROFILE_REMOVAL_TIMEOUT_MS;
+  let lastError = null;
+  for (;;) {
     try {
       rmSync(profilePath, {
         recursive: true,
@@ -316,12 +372,16 @@ async function removeProfile(profilePath) {
         maxRetries: 40,
         retryDelay: 250,
       });
-    } catch {
-      // A just-killed WebView2 child can briefly retain a profile handle.
+    } catch (error) {
+      lastError = error;
     }
     if (!existsSync(profilePath)) return true;
+    if (Date.now() >= deadline) break;
     await delay(750);
   }
+  console.error(
+    `  [cleanup] ${profilePath} is still held: ${lastError?.code ?? lastError?.message ?? "unknown reason"}`,
+  );
   return false;
 }
 

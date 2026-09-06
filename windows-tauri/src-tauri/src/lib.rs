@@ -338,6 +338,44 @@ fn qa_holds_preflight() -> bool {
     std::env::var("LETSCUBE_TAURI_QA_HOLD_PREFLIGHT").as_deref() == Ok("1")
 }
 
+/// Whether this launch is the harness's own, and so must not be the installed
+/// client's twin.
+///
+/// `tauri-plugin-single-instance` names its mutex, window class and window
+/// after `config.identifier` and offers no Windows-side override — only a
+/// Linux `dbus_id`. So to Windows the isolated QA build and the installed
+/// client were one instance: launching QA while LETSCUBE was open handed the
+/// launch straight to the installed client and left the suite waiting on a
+/// window that was never built. The harness refused to start rather than do
+/// that, which stopped the 0.2.13 and 0.2.14 releases until someone closed the
+/// application by hand.
+///
+/// Two gates on purpose. The whole branch is compiled out of release builds, so
+/// the shipped identity cannot move; and even a debug build takes it only when
+/// the harness asks, so `tauri dev` keeps the shipped identity and a
+/// developer's own profile with it.
+#[cfg(debug_assertions)]
+fn qa_wants_isolated_identity() -> bool {
+    std::env::var("LETSCUBE_TAURI_QA_ISOLATED_IDENTITY").as_deref() == Ok("1")
+}
+
+/// The identity an isolated QA launch runs under.
+///
+/// A suffix rather than an unrelated name, so anything this leaves on the
+/// machine is recognisably ours. `identifier` also names
+/// `%LOCALAPPDATA%\<identifier>`, and that is the point rather than a side
+/// effect: until this existed every QA run wrote its update channel and its
+/// node-trust record into the installed client's own directory.
+///
+/// What it does *not* move: the toast AUMID (`WINDOWS_APP_ID`, a separate
+/// constant), the `letscube-notification` scheme (registered by the installer,
+/// never by this process), the updater endpoint and its signing key, and the
+/// tray, which is per-process and never keyed by identifier.
+#[cfg(debug_assertions)]
+fn qa_isolated_identifier(shipped: &str) -> String {
+    format!("{shipped}.qa")
+}
+
 #[cfg(debug_assertions)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QaStartupMode {
@@ -1693,6 +1731,17 @@ fn begin_startup_qa(window: WebviewWindow, app: AppHandle) {
 }
 
 pub fn run() {
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+    // Done here rather than inside `setup`, because the single-instance plugin
+    // reads the identifier in its own setup and the mutex it names has to be
+    // taken before any window exists.
+    #[cfg(debug_assertions)]
+    if qa_wants_isolated_identity() {
+        let isolated = qa_isolated_identifier(&context.config().identifier);
+        context.config_mut().identifier = isolated;
+    }
+
     tauri::Builder::default()
         .manage(StartupController(Mutex::new(StartupState::new())))
         .manage(PendingNotificationRoute(Mutex::new(None)))
@@ -1778,7 +1827,7 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running LETSCUBE Windows client");
 }
 
@@ -1830,6 +1879,21 @@ mod tests {
             snapshot.error_code.as_deref(),
             Some("update_configuration_failed")
         );
+    }
+
+    /// The QA identity has to be a different name to Windows — that is the
+    /// whole mechanism — and it has to stay a legal one, because it becomes a
+    /// named mutex, a window class and a directory under `%LOCALAPPDATA%`.
+    #[test]
+    fn isolated_qa_identity_is_a_distinct_and_legal_name() {
+        let shipped = "ru.letscube.messenger";
+        let isolated = qa_isolated_identifier(shipped);
+
+        assert_ne!(isolated, shipped);
+        assert!(isolated.starts_with(shipped));
+        assert!(!isolated
+            .chars()
+            .any(|character| r#"\/:*?"<>|"#.contains(character)));
     }
 
     #[test]

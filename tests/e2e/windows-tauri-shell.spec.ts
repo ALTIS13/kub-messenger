@@ -1,8 +1,8 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { chromium, expect, test } from "@playwright/test";
 import { loadQaCredentials } from "./helpers/auth";
+import { startLocalFrontendServer } from "./helpers/local-frontend";
 
 const PRODUCTION_ORIGIN = "https://app.letscube.ru";
 const WINDOWS_RELEASE = JSON.parse(
@@ -745,64 +745,6 @@ function validateCdpUrl(value: string) {
     throw new Error("LETSCUBE_TAURI_CDP_URL must be an uncredentialed loopback HTTP origin.");
   }
   return url.origin;
-}
-
-async function startLocalFrontendServer() {
-  const publicRoot = path.resolve(process.cwd(), "artifacts", "kub", "dist", "public");
-  const indexPath = path.join(publicRoot, "index.html");
-  expect(existsSync(indexPath), "build the local frontend before Tauri QA").toBe(true);
-  const server = createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const relative = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
-    const candidate = path.resolve(publicRoot, relative);
-    if (
-      candidate !== publicRoot &&
-      candidate.startsWith(`${publicRoot}${path.sep}`) &&
-      existsSync(candidate) &&
-      statSync(candidate).isFile()
-    ) {
-      response.writeHead(200, { "Content-Type": contentTypeFor(candidate) });
-      response.end(readFileSync(candidate));
-      return;
-    }
-    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    response.end(readFileSync(indexPath));
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string")
-    throw new Error("Local frontend server did not bind.");
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  };
-}
-
-function contentTypeFor(filePath: string) {
-  const extension = path.extname(filePath).toLowerCase();
-  return (
-    (
-      {
-        ".css": "text/css; charset=utf-8",
-        ".html": "text/html; charset=utf-8",
-        ".ico": "image/x-icon",
-        ".jpeg": "image/jpeg",
-        ".jpg": "image/jpeg",
-        ".js": "text/javascript; charset=utf-8",
-        ".json": "application/json; charset=utf-8",
-        ".png": "image/png",
-        ".svg": "image/svg+xml",
-        ".webmanifest": "application/manifest+json; charset=utf-8",
-        ".webp": "image/webp",
-      } as Record<string, string>
-    )[extension] ?? "application/octet-stream"
-  );
 }
 
 async function connectToTauri(cdpUrl: string) {
