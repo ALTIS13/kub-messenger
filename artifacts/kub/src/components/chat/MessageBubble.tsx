@@ -730,6 +730,25 @@ export function MessageBubble({
   const imageDimensions = message.type === "image" && mediaVariant?.previewWidth && mediaVariant?.previewHeight
     ? { width: mediaVariant.previewWidth, height: mediaVariant.previewHeight }
     : mediaDimensions;
+  /**
+   * The width of whatever `imageDisplayUrl` points at, and of nothing else.
+   *
+   * `imageDimensions` cannot answer this, which is the trap: it is chosen on
+   * `previewWidth && previewHeight` while the URL above is chosen on
+   * `previewUrl`, and those are not the same condition. `media_variants.width`
+   * is nullable, so a preview row that carries an address but no width sends
+   * `imageDimensions` to `mediaDimensions` — the ORIGINAL's metadata — while
+   * the element is showing the preview. Declaring the original's width on the
+   * preview's address is the same lie as the hardcoded `1280w`, just harder to
+   * see, and no `thumbWidth < mainWidth` guard can catch it because the
+   * original really is the larger number.
+   *
+   * Keyed on `previewUrl` so the width and the address can never come from
+   * different rows. Unknown stays unknown, and the caller drops the set.
+   */
+  const imageDisplayWidth = message.type === "image"
+    ? (mediaVariant?.previewUrl ? mediaVariant.previewWidth ?? null : mediaDimensions?.width ?? null)
+    : null;
   const videoPosterUrl = message.type === "video" ? mediaVariant?.videoPosterUrl : undefined;
   const videoPlaybackUrl = message.type === "video" && message.media_url
     ? selectVideoPlaybackUrl({
@@ -1546,6 +1565,8 @@ export function MessageBubble({
                   url={imageDisplayUrl ?? message.media_url}
                   originalUrl={message.media_url}
                   thumbUrl={mediaVariant?.thumbUrl}
+                  thumbWidth={mediaVariant?.thumbWidth ?? null}
+                  mainWidth={imageDisplayWidth}
                   title={message.content ?? "Фото"}
                   dimensions={imageDimensions}
                   onOpen={() => onOpenMedia?.({ type: "image", url: message.media_url!, title: message.content ?? "Фото" })}
@@ -1724,6 +1745,8 @@ function MediaImage({
   url,
   originalUrl,
   thumbUrl,
+  thumbWidth,
+  mainWidth,
   title,
   dimensions,
   onOpen,
@@ -1731,6 +1754,8 @@ function MediaImage({
   url: string;
   originalUrl: string;
   thumbUrl?: string;
+  thumbWidth?: number | null;
+  mainWidth?: number | null;
   title: string;
   dimensions: MediaDimensions | null;
   onOpen: () => void;
@@ -1740,6 +1765,32 @@ function MediaImage({
   const aspectStyle = getMediaAspectStyle(dimensions);
   const hasReservedAspect = Boolean(aspectStyle);
   const activeUrl = usingOriginal ? originalUrl : url;
+
+  /**
+   * Two candidates, each declared at the width it actually is.
+   *
+   * The descriptors used to be written `${thumbUrl} 360w, ${url} 1280w`, and
+   * neither number came from anywhere: both were invented and neither variant
+   * is normally either size. A thumb measured 154px wide while claiming 360w,
+   * so on a 390px phone — where `sizes` asks for 86vw, about 335px — the
+   * browser believed the thumb was enough detail and drew a 154px image into a
+   * 335px box. The reverse costs bytes: an over-declared preview is skipped in
+   * favour of a full-size original nobody needed.
+   *
+   * The real widths were already being carried from the database rows all
+   * along, in `thumbWidth` and `previewWidth`; they simply never reached this
+   * element. Both arrive as props rather than being re-derived here, because
+   * the width has to come from the same row as the address it describes — see
+   * `imageDisplayWidth` at the call site for what happens when it does not.
+   *
+   * If either width is unknown, the set is dropped rather than guessed. `src`
+   * alone is correct — it is only the resolution hint that is missing — and a
+   * wrong descriptor is worse than no descriptor, because the browser trusts
+   * it absolutely and has no way to find out otherwise.
+   */
+  const srcSet = !usingOriginal && thumbUrl && thumbWidth && mainWidth && thumbWidth < mainWidth
+    ? `${thumbUrl} ${thumbWidth}w, ${url} ${mainWidth}w`
+    : undefined;
 
   useEffect(() => {
     setFailed(false);
@@ -1776,8 +1827,8 @@ function MediaImage({
     >
       <img
         src={activeUrl}
-        srcSet={!usingOriginal && thumbUrl ? `${thumbUrl} 360w, ${url} 1280w` : undefined}
-        sizes="(max-width: 640px) 86vw, 420px"
+        srcSet={srcSet}
+        sizes={srcSet ? "(max-width: 640px) 86vw, 420px" : undefined}
         alt={title || "Фото"}
         loading="lazy"
         decoding="async"

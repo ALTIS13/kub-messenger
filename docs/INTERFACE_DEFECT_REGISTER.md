@@ -4269,18 +4269,69 @@ not been reproduced, and the QA conversation is too small to hunt in — five
 pictures, all of which paint. Two things are worth measuring on the owner's own
 message rather than guessed at:
 
-- The `srcset` descriptors in `MediaImage` are hardcoded `360w` and `1280w`
-  whatever the variants actually are. Measured, the preview in the QA chat is
-  **154×335** while it is advertised as `1280w`, so on a DPR-3 phone the browser
-  is told to expect eight times the pixels it gets. That mis-selection is a real
-  wart and is worth fixing on its own, but it produces a blurry picture, not an
-  empty one, so it is not yet the report.
+- ~~The `srcset` descriptors in `MediaImage` are hardcoded `360w` and `1280w`
+  whatever the variants actually are.~~ **Fixed, and closed by D-068.** It was
+  never the reported symptom — a descriptor that lies produces a blurry picture,
+  not an empty one — but it was a real fault found while measuring this one.
 - A bubble only reserves its box when the variant row carries dimensions, so the
   reported symptom is specifically *variant row present, pixels absent*. The one
   state that produces it silently — no error box, no pixels — is a load that
   never starts or never finishes. Worth checking against a real iOS device
   rather than Playwright's WebKit, which does not carry iOS's decoded-image
   limits.
+
+## D-068 `[x]` Width descriptors that were never measured
+
+**Severity:** medium. Every photograph in every conversation, on every engine.
+Found while measuring D-067; it is not D-067's symptom.
+
+**Surface:** `MediaImage` in
+`artifacts/kub/src/components/chat/MessageBubble.tsx`.
+
+**Defect:** the candidate set was written `${thumbUrl} 360w, ${url} 1280w`.
+Neither number came from anywhere — both were typed in, and neither variant is
+normally either size. Measured against production, a thumb declared `360w` is
+**166px** and a preview declared `1280w` is **591px**. A width descriptor is not
+a hint the browser verifies; it is a promise it acts on and cannot check, so the
+whole selection was decided by two invented numbers. Over-declaring makes the
+browser draw a small file into a large box, or skip the variant for a full-size
+original nobody needed; under-declaring makes it reach past a perfectly good
+variant.
+
+**The real widths were already in hand** — `thumbWidth` on the variant row, and
+the preview's own `previewWidth` — and simply never reached the element.
+
+**Fixed** by passing both as props and declaring each candidate at the width it
+actually is; when either width is unknown the set and its `sizes` are dropped
+rather than guessed, because `src` alone is correct and a wrong descriptor is
+worse than an absent one.
+
+**A second fault was found while writing the regression test, and is fixed with
+it.** The main candidate's width was first taken from `dimensions`. That is
+chosen on `previewWidth && previewHeight` while the *address* is chosen on
+`previewUrl` — not the same condition, and `media_variants.width` is nullable.
+A preview row carrying an address but no width therefore sent `dimensions` to
+the ORIGINAL's metadata while the element went on showing the preview, so the
+original's width was declared on the preview's address: the same lie, harder to
+see, and invisible to the `thumbWidth < mainWidth` guard because the original
+really is the larger number. The width is now keyed on `previewUrl`, so it can
+never come from a different row than the address it describes.
+
+**Regression test:** `tests/e2e/message-image-srcset.spec.ts`. It states the
+contract rather than the repair — not "the descriptor is not 360w" but *every
+declared descriptor equals the intrinsic width of the file it names*, checked by
+loading each candidate and reading its `naturalWidth`. The second case strips
+`width` from every `image_preview` row in the REST response and asserts that no
+`srcset` and no `sizes` are emitted while `src` survives and the picture still
+paints.
+
+**Proved by mutation, hashing the file before and after each.** Restoring
+`360w`/`1280w` fails it in both engines with `declared 1280w, actually 591px`;
+understating every descriptor to a third fails it with `declared 55w, actually
+166px`, so both directions are caught rather than only the one that was
+repaired; and taking the width from `dimensions` again fails the second case
+with three srcsets declared for variants whose width is unknown. 8/8 on
+`webkit-mobile-390` and `chromium-mobile-390`.
 
 ## Measured on the device, and not a defect
 
