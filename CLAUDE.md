@@ -41,13 +41,27 @@ of `docs/PRODUCTION_PRIORITY_TRACKER.md`. Two halves, kept separate on purpose:
 
 Write that stage's detailed task-by-task plan when it starts, not before.
 
-One follow-up was deliberately left outside Task 2 and must not be forgotten:
-`isSupabaseConfigured()` in `artifacts/kub/src/lib/supabase/client.ts` has no
-direct coverage, so mutating its `&&` to `||` keeps the whole suite green while
-a half-configured build (URL present, key missing — a realistic Coolify
+The follow-up left outside Task 2 is **closed as of 2026-09-06**, and not by
+the means this note predicted. It said `isSupabaseConfigured()` had no direct
+coverage — mutating its `&&` to `||` kept the whole suite green while a
+half-configured build (URL present, key missing, a realistic Coolify
 misconfiguration) would enter `AppRoutes` and throw at `createClient()` instead
-of rendering the configuration screen. Closing it needs a third dev-server
-variant, so it belongs to a hardening task or Task 5.
+of rendering the configuration screen — and that closing it needed a third
+dev-server variant.
+
+It needed no server at all. The check was untestable rather than untested:
+`client.ts` reads `import.meta.env` at load and imports supabase-js, neither of
+which a `node --test` process has. The decision is pure, so it moved to
+`artifacts/kub/src/lib/supabase/config.ts`, which imports nothing;
+`tests/unit/supabase-config.test.mjs` pins both operators — the `&&` for "both
+halves present" and the `||` that prefers the publishable key name while the
+legacy one still works — including empty-string values, which is the shape a
+deployment actually fails on. Four mutations turn it red, among them the exact
+one this note named.
+
+The general lesson is worth more than the fix: a check that cannot be reached
+from a test is not a gap in the suite, it is a gap in the module boundary, and
+moving the decision is usually cheaper than building a harness around it.
 
 The bot track is not the current work. Bot Platform v1 is implemented, migrated,
 deployed and production-canary verified; see section 6 and
