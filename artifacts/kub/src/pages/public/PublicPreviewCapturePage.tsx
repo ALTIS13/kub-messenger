@@ -155,9 +155,6 @@ export default function PublicPreviewCapturePage() {
                   positioned with `z-index: auto`, so the last one in the markup
                   is the one that paints on top. `ChatWindow` orders them the
                   same way and for the same reason — see the note there. */}
-              <div ref={chromeRef} className="absolute inset-x-0 top-0 flex flex-col" data-testid="chat-chrome-stack">
-                <ChatHeader chatId={activeChat.id} chat={activeChat} />
-              </div>
               <MessageList
                 messages={messages}
                 onReply={() => undefined}
@@ -170,6 +167,9 @@ export default function PublicPreviewCapturePage() {
                 bottomInset={composerHeight}
                 layoutVersion={composerHeight}
               />
+              <div ref={chromeRef} className="absolute inset-x-0 top-0 flex flex-col" data-testid="chat-chrome-stack">
+                <ChatHeader chatId={activeChat.id} chat={activeChat} />
+              </div>
               <div ref={composerRef} data-testid="chat-composer-dock" className="absolute inset-x-0 bottom-0">
                 <MessageInput
                   chatId={activeChat.id}

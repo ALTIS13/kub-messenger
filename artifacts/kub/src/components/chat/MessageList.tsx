@@ -770,7 +770,6 @@ export function MessageList({
     <div
       className="relative flex-1 min-h-0 min-w-0 overflow-hidden"
       style={{
-        order: -1,
         // Painted before the chrome that frosts over it, and the mechanism is
         // this box's position in the markup — nothing in this style.
         //
