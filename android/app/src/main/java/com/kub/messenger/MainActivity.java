@@ -13,30 +13,46 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        allowSystemDarkTheme();
+        refuseAlgorithmicDarkening();
         markNightModeInUserAgent();
         publishNightMode();
     }
 
     /**
-     * Lets the page see the phone's dark theme.
+     * Refuses to let the WebView repaint the page for us.
      *
-     * Android's WebView does not pass the system night mode through to
-     * `prefers-color-scheme` unless the app asks it to. Measured on two phones
-     * running Android 15 with night mode on, the page reported
-     * `prefers-color-scheme: dark` as false and LETSCUBE rendered light on a
-     * dark phone.
+     * This used to pass `true`, on the reasoning that the platform "only
+     * darkens content that has no dark styles of its own, and this app has
+     * them". That is true of the app and false of one of its two themes. A page
+     * that declares `color-scheme: light` — which is exactly what LETSCUBE
+     * declares once the reader picks the light theme, in `themeRuntime.ts` and
+     * in the `index.html` bootstrap — is claiming support for light ONLY, and
+     * on a night-mode phone that is the documented case WebView darkens. A page
+     * declaring `light dark` is left alone, which is why the dark theme always
+     * looked right and only the light one was wrong.
      *
-     * The activity theme is already `DayNight`, so with this opt-in the WebView
-     * reports dark and the app styles itself. Nothing is auto-darkened: the
-     * platform only applies its own darkening to content that has no dark
-     * styles of its own, and this app has them.
+     * Photographed on the device with `kub-theme` set to `light` (D-059): the
+     * document was correct in every way a document can be — root class `light`,
+     * `data-theme="light"`, computed `color-scheme: light`, body background
+     * `rgb(233, 239, 246)` — and the pixels came out `rgb(21, 22, 23)` at three
+     * separate points of bare page ground. R, G and B within 2 of each other:
+     * the hue was gone, which is the signature of the platform's own darkening
+     * rather than of any fill this product defines. Nothing in the DOM said it
+     * had happened.
+     *
+     * Nothing is lost by refusing. The flag does not decide what
+     * `prefers-color-scheme` reports — the WebView answers that from the
+     * activity theme's `isLightTheme`, and the theme is still `DayNight` — and
+     * the page does not trust that query anyway: `publishNightMode` below hands
+     * it the activity's own answer, which is the channel the bootstrap actually
+     * reads. What the refusal removes is the third appearance that belonged to
+     * neither theme.
      */
-    private void allowSystemDarkTheme() {
+    private void refuseAlgorithmicDarkening() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) return;
         if (getBridge() == null || getBridge().getWebView() == null) return;
         WebSettings settings = getBridge().getWebView().getSettings();
-        WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, true);
+        WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false);
     }
 
     /**
