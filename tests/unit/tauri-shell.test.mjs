@@ -52,7 +52,16 @@ function collectTokens(css, blockPattern) {
   const source = css.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "));
   const block = source.match(blockPattern)?.[0] ?? "";
   const tokens = new Map();
-  for (const [, name, value] of block.matchAll(/(--(?:kub|brand|app|glass)-[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
+  // Every custom property, not a list of prefixes it is allowed to be. The
+  // list was `kub|brand|app` when the material arrived called `--glass-`, so
+  // the check that exists to stop these copies drifting could not see the thing
+  // that had drifted — proven by mutation: the fill turned opaque red, the edge
+  // green and the blur to zero, and the suite stayed green on all three.
+  // Adding `glass` to the list fixes today and loses the next family the same
+  // way, so there is no list. A name only ever reaches a comparison when BOTH
+  // files declare it, so widening this cannot produce a false failure; it can
+  // only stop one from being missed.
+  for (const [, name, value] of block.matchAll(/(--[a-z][a-z0-9-]*)\s*:\s*([^;]+);/g)) {
     // --glass-shadow is three shadows on three lines. Newlines and the
     // indentation after them are not part of the value, so they are collapsed
     // before the comparison; anything else that differs is a real difference.
