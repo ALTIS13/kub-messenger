@@ -17,8 +17,9 @@ import { expect, test, type Page } from "@playwright/test";
  * the settled position passes just as well while the correction is visible,
  * which is exactly the state this defect was in.
  *
- * The sampler runs in `requestAnimationFrame`, so every entry it records is a
- * frame the browser was about to paint.
+ * The sampler records what each frame painted rather than what it looked like
+ * before layout — see `installSampler`, which is where that distinction is paid
+ * for and where the measurement behind it is written down.
  */
 
 const CAPTURE_PATH = "/__qa/public-preview";
@@ -52,25 +53,80 @@ const FIXTURE = {
 type Sample = { t: number; rows: number; top: number; height: number; client: number };
 
 /**
- * Records one entry per animation frame, before the app has booted.
+ * Records what each frame actually painted, before the app has booted.
  *
  * Injected rather than polled: the whole defect lives in the first few frames
  * after the list mounts, and anything that samples from the test process would
  * arrive long after they had been painted.
+ *
+ * Two readings per frame, and the second one is the reason this spec can be
+ * trusted at 360. `requestAnimationFrame` runs BEFORE style, layout and
+ * ResizeObserver delivery of its own frame, so a reading taken there is the
+ * state before any correction that frame is about to make. The component's own
+ * observer then corrects the position after layout and before the paint, which
+ * means the rAF reading can describe a frame nobody ever saw. That is D-039,
+ * an entry the defect register has already had to withdraw once for this.
+ *
+ * Measured at 360x800 across twelve entries: the rAF reading alone reported
+ * three frames over 40px — 728px and 1092px among them — while a ResizeObserver
+ * registered after the component's own, and therefore delivered after its
+ * correction, reported none at all in 79 deliveries.
+ *
+ * So each frame's reading is overwritten by anything the sampler sees later in
+ * that same frame, and the surviving value is pushed at the start of the next
+ * one. A misplacement that the frame corrects before painting disappears; one
+ * that is still there when the browser paints does not, however briefly it
+ * lasts. The observer is attached a task after the list first has rows, so the
+ * component's own observer is registered first and is delivered first.
  */
 function installSampler(samplesKey: string) {
   const samples: Sample[] = [];
   (window as unknown as Record<string, unknown>)[samplesKey] = samples;
-  const tick = () => {
+
+  const read = (): Sample | null => {
     const element = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
-    if (element) {
-      samples.push({
-        t: Math.round(performance.now()),
-        rows: element.querySelectorAll("[data-message-id]").length,
-        top: Math.round(element.scrollTop),
-        height: element.scrollHeight,
-        client: element.clientHeight,
-      });
+    if (!element) return null;
+    return {
+      t: Math.round(performance.now()),
+      rows: element.querySelectorAll("[data-message-id]").length,
+      top: Math.round(element.scrollTop),
+      height: element.scrollHeight,
+      client: element.clientHeight,
+    };
+  };
+
+  let pending: Sample | null = null;
+  let attaching = false;
+  let observer: ResizeObserver | null = null;
+
+  const attach = () => {
+    if (observer) return;
+    const element = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
+    const content = element?.firstElementChild;
+    if (!element || !content) return;
+    observer = new ResizeObserver(() => {
+      const late = read();
+      if (late) pending = late;
+    });
+    observer.observe(content);
+    observer.observe(element);
+  };
+
+  const tick = () => {
+    if (pending) {
+      samples.push(pending);
+      pending = null;
+    }
+    const now = read();
+    if (now) {
+      pending = now;
+      if (!attaching && now.rows > 0) {
+        attaching = true;
+        // A task, not this frame: the component registers its observer from a
+        // passive effect, and one registered before it would be delivered
+        // before its correction — which is the very reading being avoided.
+        window.setTimeout(attach, 0);
+      }
     }
     requestAnimationFrame(tick);
   };
