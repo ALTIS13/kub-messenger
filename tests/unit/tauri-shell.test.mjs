@@ -459,6 +459,11 @@ test("Windows startup uses one main window and a local approved handshake scene"
 
   const html = readText("windows-tauri/ui/startup.html");
   const css = readText("windows-tauri/ui/startup.css");
+  // Comments in this stylesheet describe the very declarations under test, so
+  // a bare substring search reads prose as CSS — that has already turned one
+  // assertion green against a sentence. Every negative assertion below runs
+  // against the sheet with its comments blanked.
+  const cssBody = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const script = readText("windows-tauri/ui/startup.js");
   assert.match(html, /data-testid="startup-client-fingerprint"/);
   assert.match(html, /data-testid="startup-server-fingerprint"/);
@@ -504,20 +509,45 @@ test("Windows startup uses one main window and a local approved handshake scene"
     css,
     /\.connection-port\s*\{[^}]*width:\s*var\(--connector-node\);\s*height:\s*var\(--connector-node\);/s,
   );
-  // The channel is an enclosure, not a line: it carries the device blocks' own
-  // material. The relationship is what is pinned, not a literal colour — the
-  // colour is exactly what changed when these surfaces became translucent, and
-  // a pin on the old value would have failed for a change that kept the
-  // contract intact.
+  // The channel is a line, and it is the same line as the stage track.
+  //
+  // It used to be an enclosure carrying the device blocks' own material: a
+  // 20px filled tube with a border, a 20px filled junction under a glow ring
+  // and two 14px bordered sockets. That was four dense objects in a row on a
+  // screen where everything else had come down to a hairline, and it is what
+  // the owner was pointing at when he said the bar between the machines still
+  // looked old — the stage track had already been redrawn and this had not.
+  //
+  // What is pinned is the agreement between the two indicators, not a literal
+  // size: they must resolve to the same height, so redrawing one and leaving
+  // the other cannot happen again.
   assert.match(
-    css,
-    /\.rail\s*\{[^}]*height:\s*var\(--conduit-height\);[^}]*background:\s*var\(--glass-fill\);[^}]*border:\s*1px solid var\(--kub-border-color\);/s,
+    cssBody,
+    /--conduit-height:\s*4px;/,
+    "the channel is a line, matching the stage track",
+  );
+  assert.match(
+    cssBody,
+    /--track-height:\s*4px;/,
+    "the stage track and the channel must resolve to the same height",
+  );
+  assert.doesNotMatch(
+    cssBody,
+    /\.rail\s*\{[^}]*(?:border\s*:|backdrop-filter)/s,
+    "the channel stays flat: an outlined, frosted tube is what dated this assembly",
+  );
+  assert.doesNotMatch(
+    cssBody,
+    /\.handshake\.is-connected \.center-seal\s*\{[^}]*box-shadow/s,
+    "no halo on the junction — it was the loudest thing left on the screen",
   );
   // Every panel on this screen is the same material, and none of them is
   // opaque. A surface that stops sampling the scene behind it stops being a
   // surface and becomes a flat patch of a slightly different colour, which is
   // what this screen was before.
-  for (const selector of [".handshake::before {", ".computer::before, .server::before {", ".rail {"]) {
+  // `.rail` is deliberately absent from this list now: it is a 4px line, and a
+  // line has no behind to sample. The panels below are still surfaces.
+  for (const selector of [".handshake::before {", ".computer::before, .server::before {"]) {
     const start = css.indexOf(selector);
     assert.ok(start >= 0, selector + " is missing");
     const block = css.slice(start, css.indexOf("}", start));
@@ -571,7 +601,6 @@ test("Windows startup uses one main window and a local approved handshake scene"
   // Each of the five is pinned below as an assertion that it stays gone. They
   // are not hypothetical: all five were written deliberately once, so all five
   // can be written deliberately again.
-  const cssBody = css.replace(/\/\*[\s\S]*?\*\//g, "");
   assert.match(css, /\.stages\s*\{[^}]*gap:\s*0;/s, "the track is one object, so the columns carry no gaps");
   assert.match(
     cssBody,

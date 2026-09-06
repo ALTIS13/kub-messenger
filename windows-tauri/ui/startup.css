@@ -341,9 +341,17 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
   --column-shift: 8.5px;    /* a quarter of the middle column: an outer
                                column of width (W-34)/2 has its centre at
                                W/4 - 8.5px, not at W/4 */
-  --connector-node: 14px;   /* the two sockets, one size */
-  --conduit-height: 20px;   /* the channel is an enclosure, not a line */
-  --conduit-core: 20px;     /* the junction that caps both halves */
+  /* Weight, not shape, is what dated this assembly. It was a 20px filled tube
+     with a border, a 20px filled square joining its halves under a glow ring,
+     and two 14px bordered sockets — four dense objects in a row on a screen
+     where everything else is a hairline. The vocabulary of rounded rectangles
+     is kept on purpose (see the socket note below: circles turned the whole
+     thing into a stepper); only the weight comes down, to the same 4px the
+     stage track uses, so the two indicators on this screen finally speak the
+     same language. */
+  --connector-node: 10px;   /* the two sockets, one size */
+  --conduit-height: 4px;    /* a line, matching --track-height */
+  --conduit-core: 10px;     /* the junction that caps both halves */
   --connector-clear: 18px;  /* drawn chassis edge to node, both sides alike */
   /* Distance from a device box's edge out to the far side of its node. */
   --node-offset: calc(var(--connector-clear) + var(--connector-node) - var(--chassis-inset));
@@ -357,13 +365,12 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
 .connection-port {
   position: absolute; z-index: 3;
   width: var(--connector-node); height: var(--connector-node);
-  border: 2px solid var(--channel-accent); border-radius: 5px;
-  background: var(--glass-fill);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
+  border: 1.5px solid var(--channel-accent); border-radius: 3px;
+  background: var(--kub-surface-2);
   /* The ring is the page's own colour so the socket reads as punched through
-     the channel rather than laid on top of it. */
-  box-shadow: 0 0 0 3px var(--kub-bg), inset 0 1px 0 var(--glass-line);
+     the channel rather than laid on top of it. It stays, at 2px: without it a
+     socket sitting on the line reads as a lump in the line. */
+  box-shadow: 0 0 0 2px var(--kub-bg);
   transition: border-color var(--kub-motion-standard) var(--kub-ease-standard),
               background var(--kub-motion-standard) var(--kub-ease-standard);
 }
@@ -394,13 +401,8 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
 .rail {
   position: absolute; top: calc(50% - var(--conduit-height) / 2);
   height: var(--conduit-height); overflow: hidden;
-  background: var(--glass-fill);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--kub-border-color);
-  box-shadow: inset 0 1px 0 var(--glass-line);
-  transition: background var(--kub-motion-standard) var(--kub-ease-standard),
-              border-color var(--kub-motion-standard) var(--kub-ease-standard);
+  background: color-mix(in srgb, var(--channel-accent) 28%, transparent);
+  transition: background var(--kub-motion-standard) var(--kub-ease-standard);
 }
 /* Each half is open towards the junction, so the two halves and the core read
    as one tube rather than as three objects in a row. */
@@ -442,26 +444,27 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
   top: calc(17px - var(--conduit-core) / 2);
   left: 50%; margin-left: calc(-1 * var(--conduit-core) / 2);
   width: var(--conduit-core); height: var(--conduit-core);
-  border: 1px solid var(--kub-border-color); border-radius: 7px;
+  border: 1px solid var(--kub-border-color); border-radius: 3px;
   background: var(--kub-surface-2);
   transition: background var(--kub-motion-standard) var(--kub-ease-standard),
-              border-color var(--kub-motion-standard) var(--kub-ease-standard),
-              box-shadow var(--kub-motion-standard) var(--kub-ease-standard);
+              border-color var(--kub-motion-standard) var(--kub-ease-standard);
 }
 
 /* Confirmed: the channel stops moving and stands full. */
 .handshake.is-connected .rail {
-  background: color-mix(in srgb, var(--channel-accent) 20%, var(--kub-surface-2));
-  border-color: color-mix(in srgb, var(--channel-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--channel-accent) 28%, transparent);
 }
+/* A full line, standing still: the channel is up and nothing is in flight. */
 .handshake.is-connected .rail i {
   animation: none;
-  background: color-mix(in srgb, var(--channel-accent) 34%, transparent);
+  background: var(--channel-accent);
 }
+/* No halo. A ring around a 10px joint on a 4px line is most of the object's
+   visual mass spent on decoration, and it was the loudest thing on the
+   screen once everything around it came down to a hairline. */
 .handshake.is-connected .center-seal {
   background: var(--channel-accent);
   border-color: var(--channel-accent);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--channel-accent) 14%, transparent);
 }
 
 /* The fingerprint did not match, or nothing connected at all: the channel is
