@@ -3565,3 +3565,320 @@ because a real fingerprint has no business in a report. The one probe that neede
 the signed-in application makes every glyph in the document transparent and hides
 every raster before it photographs anything, so the strips it compares hold the
 shape of surfaces and nothing readable.
+
+## The Android shell, walked for the first time since the redesign
+
+Walked 2026-09-06 on a Realme RMX3830, Android 15, API 35, WebView
+Chrome/137.0.7151.72, screen 720x1600 at density 320 — a **360 x 748 CSS px**
+viewport at `devicePixelRatio` 2. Debug APK built from `20feafc` by
+`pnpm.cmd android:build:production:debug`, installed over `adb`, signed in on
+the QA owner account so every conversation in this section is synthetic. Geometry
+and computed styles were read over CDP against the live WebView
+(`adb forward` to `webview_devtools_remote`); every screenshot is
+`adb exec-out screencap`, so what is photographed includes the system bars and
+the real IME.
+
+**The viewport is the finding behind three of the five.** The release matrix
+stops at `chromium-mobile-390`; this phone is 360, and 360 is the most common
+Android width there is. Nothing below 390 has ever been looked at.
+
+Two things measured clean and are recorded here so they are not re-checked:
+`CSS.supports("backdrop-filter", "blur(1px)")` is **true** in this WebView, so
+the `@supports not (backdrop-filter: blur(1px))` fallback of rule 6 stays dormant
+and does not fire falsely — note that the *prefixed* property is the one that is
+absent here, which is the opposite of the trap rule 9 records. And
+`env(safe-area-inset-*)` resolves to `0px` on all four sides **correctly**:
+Capacitor insets the WebView above the system bars rather than going
+edge-to-edge, `innerHeight` is 748 against an 800px screen, and the app never
+draws under the status or gesture bar. The absent `viewport-fit=cover` in
+`artifacts/kub/index.html` therefore costs nothing on this shell.
+
+## D-058 The keyboard takes the newest 266px of the conversation, and nothing takes them back
+
+Found 2026-09-06, first thing, on the most ordinary action a messenger has:
+tapping the composer to reply.
+
+**Severity:** high. Every chat, every Android device, every time the keyboard
+opens.
+
+**Surface:** `artifacts/kub/src/components/chat/MessageList.tsx:641-658` — the
+`ResizeObserver` that keeps the conversation pinned to the bottom observes
+`contentRef`, the message column. The other re-pin, the layout effect at
+`:639`, is keyed on `bottomInset`, `topInset` and `layoutVersion`.
+
+**Defect:** on Android the WebView **resizes** when the IME opens. Nothing the
+existing mechanisms watch changes:
+
+| | keyboard closed | keyboard open |
+| --- | --- | --- |
+| `window.innerHeight` | 748 | **482** |
+| `visualViewport.height` | 748 | 482 |
+| computed keyboard inset | 0 | **0** |
+| `--kub-composer-height` | 70px | 70px |
+| `--kub-chat-chrome-height` | 56px | 56px |
+| content `scrollHeight` | 4467 | 4467 |
+| scrollport `clientHeight` | 748 | **482** |
+
+The keyboard inset in `ChatWindow.tsx:173-196` correctly stays at `0`, because
+`innerHeight - visualViewport.height - visualViewport.offsetTop` is genuinely 0
+when the layout viewport itself shrank — the composer is already above the
+keyboard and needs no padding. The composer's height does not move, so
+`layoutVersion` does not change. The content's height does not move, so the
+`ResizeObserver` never fires. **The one box that changed is the scrollport, and
+nothing observes it.**
+
+What follows is arithmetic. `scrollTop` is left at 3719 while the maximum rises
+from 3719 to 3985:
+
+| | closed | open |
+| --- | --- | --- |
+| `scrollTop` | 3719 | 3719 |
+| max `scrollTop` | 3719 | 3985 |
+| distance from bottom | **0** | **266** |
+| newest bubble, against the composer's top edge | −23.9 (clear) | **+242.1 (behind it)** |
+
+266 is exactly `748 − 482`: the reader loses the keyboard's own height of the
+newest conversation. Reproduced 2/2 on clean open/close cycles with identical
+numbers, and it does not settle — re-read 40s later, unchanged.
+
+**It closes correctly, and that is the whole mechanism.** Growing the viewport
+back clamps `scrollTop` down to the new maximum, which happens to be the bottom,
+so dismissing the keyboard looks right and hides the asymmetry: shrinking leaves
+a still-valid `scrollTop` alone, growing is forced to move it.
+
+**No affordance is offered.** `scrollTop` never changes, so no `scroll` event
+fires, so `isAtBottomRef` is still `true` and the scroll-to-bottom button — which
+does appear normally, confirmed by scrolling by hand in the same session — is not
+rendered. Nine visible buttons in the chat at that moment, none of them a way
+back down.
+
+It also does not reliably self-correct. Typing a single character left it at 266
+(draft length 1, textarea focused, distance from bottom still 266). Anything
+that *does* resize the content afterwards re-pins it, and because
+`isAtBottomRef` was never falsified the correction arrives as a 266px lurch
+rather than as a restoration.
+
+**Consequence:** the reader taps the composer to answer a message and that
+message, with the two before it, goes behind the keyboard. Screenshots:
+`04-keyboard-open.png` is the defect, `05-keyboard-alt.png` the same chat and the
+same keyboard with the list where it should be.
+
+**Not attempted here.** The direction is to observe the scrollport as well as the
+content, but `MessageList` is the most tuned mechanism in this codebase — this
+register already carries 445px, 706px, 1147px and 1233px measurements behind its
+current shape, and D-039 is a whole entry about a correction that made things
+worse. It wants its own task.
+
+## D-059 The light theme cannot be shown on a phone that is in night mode
+
+Found 2026-09-06 while photographing both themes on the device.
+
+**Severity:** medium-high. Any account that prefers light while the phone is
+dark, which is a combination the app's own theme control offers.
+
+**Surface:** `android/app/src/main/res/values/styles.xml` — `AppTheme` descends
+from `Theme.AppCompat.DayNight.DarkActionBar`, and nothing anywhere calls
+`WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false)`.
+
+**Defect:** with `kub-theme` set to `light` the document is correct in every way
+the page can be correct — and the pixels are not the light theme.
+
+| | declared | photographed |
+| --- | --- | --- |
+| root class | `h-full light` | — |
+| `data-theme` | `light` | — |
+| `:root { color-scheme }` | **`light`** | — |
+| `body` background | `rgb(233, 239, 246)` | **`rgb(21, 22, 23)`** |
+| `meta[theme-color]` | `#E9EFF6` | — |
+
+Measured from the photographed pixels the way rule 7 requires, sampled at three
+separate points of bare page ground: `rgb(21,22,23)` at all three. The hue is
+gone — R, G and B within 2 of each other — which is the signature of WebView
+algorithmic darkening rather than of any fill this product defines. The dark
+theme photographs `rgb(10,26,48)` against its `#050B18` token in the same
+places, above its token because of `--kub-ambient` and still unmistakably blue.
+
+**The page already does the standards-correct thing and is overridden.**
+`themeRuntime.ts:38` and the `index.html` bootstrap both set
+`root.style.colorScheme`, and the device confirms the computed value is `light`.
+That is precisely the declaration that *invites* algorithmic darkening: a page
+claiming support for light only, on a night-mode system, with the activity on a
+DayNight theme, is the documented case WebView darkens. A page declaring
+`light dark` is left alone — which is why the dark theme renders correctly and
+only the light one is wrong.
+
+The result is a third appearance belonging to neither theme, and it is not
+uniform: avatar fills come through untouched (`rgb(187,143,206)` identical in
+both themes at the same point) while the surfaces around them invert, so the
+palette the register's contrast work is measured against is not what is on the
+glass. **Every light-theme contrast figure in this document is unverified on
+this shell.**
+
+**Consequence:** the light theme is unreachable on a night-mode phone, and the
+darkening is silent — nothing in the DOM says it happened.
+
+## D-060 Justified bubbles open 30px rivers at the width the phone actually has
+
+**Severity:** medium. Every wrapped message, worse the narrower the device.
+
+**Surface:** the bubble text carries `[text-align:justify]` with
+`hyphens: manual`, so Russian prose is justified and never hyphenated.
+
+**Defect:** justification distributes the slack into the word spaces, and a
+283.6px column has little else to give. Measured on one message, per rendered
+line, with a `Range` over the text node — the natural space in this font at this
+size is **3.94px**:
+
+| viewport | bubble width | worst word gap | ×natural |
+| --- | --- | --- | --- |
+| **360 (this phone)** | 283.6px | **30.54px** | **7.76** |
+| 390 (narrowest tested) | 309.4px | 18.53px | 4.71 |
+| 412 | 328.3px | 13.71px | 3.48 |
+
+Same message, same engine, same fonts — only the width differs, using CDP metric
+override so nothing else can account for it. The worst line is the one carrying
+a long unbreakable token, but the natural-prose lines of the same message reach
+**18.04px (4.58×)** at 360 on their own, so this is not an artefact of the QA
+fixture's identifiers.
+
+Visible in `07-state.png` and `08-search-jump.png` as the rivers running down
+"QA-HISTORY 1085 — длинное сообщение…".
+
+**Consequence:** the narrowest viewport ever tested understates the worst gap by
+65%, and justification without hyphenation is doing the opposite of what it was
+chosen for at the width most Android phones have.
+
+## D-061 The six bottom tabs are closer together than the space in their own font
+
+**Severity:** low. Every Android phone 360px wide or narrower; cosmetic, and it
+reads as one run of words.
+
+**Surface:** the bottom tab bar's six labels at 12px, `600` weight,
+`letter-spacing: 0.3px`, uppercased.
+
+**Defect:** the items are flex children that shrink to fit, so at 360 the labels
+end up adjacent rather than clipped:
+
+| viewport | narrowest gap between two labels | narrowest item |
+| --- | --- | --- |
+| **360 (this phone)** | **3.2px** | 44.6px |
+| 390 | 9.0px | 48.0px |
+| 412 | 13.2px | 50.5px |
+
+A space character in that exact font at that exact size measures **3.02px**. The
+gap between "ЗАДАЧИ" and "АДМИНКА" is **1.06 spaces** — narrower than the gap
+between two words of one sentence, which is why `02-after-login.png` reads
+"ПРОФИЛЬ ЗАДАЧИ АДМИНКА" as a single phrase.
+
+The touch targets themselves still clear the floor — 44.6px is the narrowest,
+against the 44px rule — but only by 0.6px.
+
+## D-062 Four blurs ride inside the scrolling conversation
+
+**Severity:** low, and a contract violation regardless of the number.
+
+**Surface:** all four inside `<div ref={contentRef}>`, the scrolled content, in
+`MessageList.tsx`: the system-message pill (`:104`), the history loading band
+(`:822`), the date separator (`:887`) and the unread separator (`:894`). Each
+writes `backdrop-blur-sm` or `backdrop-blur` as a Tailwind utility.
+
+**Defect:** two rules at once. Rule 1 — the material is written by hand rather
+than taken from `.kub-glass`. Rule 6 — "message bubbles, list rows, feed cards:
+the chrome around them, yes; the content, no", and a date separator repeats once
+per day of history.
+
+**Measured**, on the device, with `dumpsys gfxinfo` across an identical set of
+eight flings over the same conversation:
+
+| | janky | 50th | 90th | 95th | 99th | slow draw cmds |
+| --- | --- | --- | --- | --- | --- | --- |
+| as shipped (7 blurs live) | 3.21% | 16ms | **21ms** | 25ms | 34ms | 28 |
+| in-list blur off (6 live) | 2.46% | 15ms | 19ms | 22ms | 28ms | 22 |
+| all blur off (0 live) | 0.88% | 11ms | **13ms** | 14ms | 20ms | 6 |
+
+Only **one** in-list blur was on screen — this conversation spans a single day —
+and removing it moved the 90th percentile 2ms of the 8ms the whole material
+costs. So the rule-6 violation is real and small; what the table actually shows
+is that **the chrome glass costs 6ms of the 8ms**, and that the 90th percentile
+as shipped sits at 21ms against a 16.7ms frame budget while without the material
+it sits at 13ms.
+
+GPU time barely moves (90th: 6ms against 5ms). The cost is on the UI thread —
+"slow issue draw commands" 28 against 6, "slow UI thread" 15 against 1 — which is
+layer management, not fill rate.
+
+**Not a first-order performance defect.** 3.21% janky is a smooth list, and
+nothing in the flings dropped a visible frame. Recorded because the contract is
+explicit, because the four sites are cheap to move onto the utilities, and
+because the 21ms figure is the honest cost of the material on a mid-range phone
+and should be known before anything is added to it.
+
+## Measured on the device, and not a defect
+
+**The scroll contracts hold, by finger rather than by wheel.** Chat entry with
+no unread lands at the bottom with the newest bubble 23.9px clear of the
+composer. Four fast upward flings in succession never snapped toward the bottom
+and never jumped to the oldest history; the history prepend fired at the top and
+the conversation carried on upward. A slow 464px drag tracked its witness row to
+within 0.5px, and a 199px drag to within 0.0px.
+
+**The search jump lands clear of chrome, and the scroll-padding tracks the
+search bar.** Jumping to a result from 25,107px away put the target at 216.1px
+from the top, fully visible, with `scroll-padding-top` and `padding-top` both at
+**174px** — the header's 56 plus the search bar that had just appeared — which is
+rule 2's "padding and scroll-padding move together" doing exactly its job while
+the keyboard was also open. `08-search-jump.png`.
+
+**D-039's withdrawal holds on this device.** A `requestAnimationFrame` sampler
+across a prepend reported the witness row displaced **+1852.6px** for one sample
+and back the next — the same shape, and a larger number, than the 1233px the
+withdrawn entry reported. It is the same instrument error: rAF runs before style
+and layout, so `getBoundingClientRect` there forces an early layout and reports a
+frame that is never painted. Recorded so the next person who points a sampler at
+this does not re-open it.
+
+**D-042 reproduces at its recorded size.** The settled anchor drift across a
+prepend measured **−39.4px** against the entry's 42px, and the loading band is
+the 43px the scroll height grows by while `loadingOlder` is set. Unchanged, still
+open, still the band.
+
+## What could not be checked, and why
+
+**Rotation.** `android/app/src/main/AndroidManifest.xml` pins the activity to
+`android:screenOrientation="portrait"`, so there is no landscape on this shell
+and no landscape keyboard. The rotation question has no answer to give here.
+
+**A second keyboard height.** Switching layout inside the installed IME
+(Russian to QWERTY, `05-keyboard-alt.png`) kept the height at exactly 266px, so
+the language-change case produced no second data point. A second IME is
+installed but making it current is a system setting and was left alone. The
+mechanism in D-058 is `Δ = clientHeight before − after`, so any other height
+displaces by exactly that height; a second measurement would illustrate it, not
+determine it.
+
+**Chat-list scrolling.** The QA owner account has three chats. There is nothing
+to fling, so the sidebar's scroll cost is unmeasured; the eight-fling figures in
+D-062 are the message list only.
+
+**Push, and the notification jump behind it.** `android/app/google-services.json`
+is absent from this worktree, so the debug build ships without the
+google-services plugin and no notification could be delivered. The search jump
+exercises the same `scrollIntoView` path and is recorded above.
+
+## Where this evidence is
+
+The device screenshots are in the session scratchpad, not in the repository:
+`01-login.png`, `02-after-login.png` (D-061), `03-chat-open.png`,
+`04-keyboard-open.png` and `05-keyboard-alt.png` (D-058), `06-message-actions.png`,
+`07-state.png` (D-060), `08-search-jump.png` and `09-light.png` (D-059). Every
+one is `adb exec-out screencap` from the device, so each includes the system bars
+and, where relevant, the real IME.
+
+Nothing in any of them carries a real conversation. The session was signed in on
+the QA owner account through `KUB_QA_OWNER_*`, the way the e2e suite does; the
+three chats it can see are `Избранное`, `Test test` and `LocationStaffTest`, and
+their contents are the `QA-HISTORY nnnn` fixtures and `codex …` sync markers this
+repository generates. No credential was typed on the device or passed on a
+command line — the sign-in reads the QA env file inside Node and drives the form
+over CDP. The app's stored theme was set to `light` for D-059 and the key removed
+afterwards, returning it to `system`; no Android setting was changed at any point.
