@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
 export type QaCredentials = {
   email: string;
@@ -97,12 +97,32 @@ export async function gotoOrSkip(page: Page, pathName: string) {
  * The sidebar menu button only exists once a session is loaded, so it is the
  * marker. A helper that can only say "I did not see a login form" cannot tell
  * signed-in from signed-out, and must not be trusted to.
+ *
+ * That marker alone was not enough. `inert` and `aria-hidden` do not hide an
+ * element, they take it out of the accessibility tree — so while the mandatory
+ * update gate blocks the shell (`MainLayout` carries both), the button is drawn
+ * and on screen and yet no role query can reach it. The helper called a
+ * signed-in client signed out, and `critical_update` failed on a session it
+ * already had.
+ *
+ * `desktop-app-shell` is the fallback because it survives that while staying
+ * positive proof: `MainLayout` is the only thing that renders it, and `App.tsx`
+ * sends anyone without a session to `/login` before `MainLayout` can mount, so
+ * it cannot be on screen for a guest. `app-top-bar` was rejected for exactly
+ * the property this one has to keep — `PublicPreviewCapturePage` renders
+ * `AppTopBar` on a public route, so it can appear with no session behind it.
  */
 async function waitForAuthenticatedShell(page: Page, timeout = 15_000): Promise<boolean> {
-  return await page
-    .getByRole("button", { name: "Меню" })
-    .first()
-    .waitFor({ state: "visible", timeout })
+  const onScreen = (locator: Locator) => locator.first().waitFor({ state: "visible", timeout });
+
+  // Raced rather than tried in turn. A fallback that only starts once the
+  // primary has spent the whole budget would double the ceiling its caller
+  // budgeted against the 45s test timeout. `Promise.any` settles as soon as
+  // either marker appears and rejects only when both are absent.
+  return await Promise.any([
+    onScreen(page.getByRole("button", { name: "Меню" })),
+    onScreen(page.getByTestId("desktop-app-shell")),
+  ])
     .then(() => true)
     .catch(() => false);
 }
