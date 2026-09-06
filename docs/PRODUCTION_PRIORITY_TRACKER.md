@@ -152,6 +152,43 @@ Use this queue before starting the next production-hardening turn. Do not repeat
 
     Deliverables: a defect register with evidence, scoped fix commits with tests, the motion plan closed task by task, and a visual QA record across the viewport and shell matrix. Write the detailed task-by-task plan when this stage actually starts; this entry is the approved scope and ordering only.
 
+    **Half A is substantially complete as of 2026-09-06, and it turned into
+    something larger than an audit.** The owner asked for the interface to be
+    brought to a modern standard with translucent surfaces, so the stage
+    absorbed a redesign as well as a defect sweep. What shipped:
+
+    - The product's surfaces are one material — four tokens per theme and two
+      utilities — with the contract and its eleven rules in
+      `docs/operations/interface-material.md`. Six of those rules were learned by
+      breaking something first, which is why they are written down.
+    - D-044 to D-050 are closed; D-048 closed itself when the text colour tokens
+      landed for another reason.
+    - Controls have one focus language instead of three. The old one was
+      assembled and immediately overwritten — a focused button's computed style
+      was byte-for-byte identical to an unfocused one — because Tailwind draws a
+      ring as `box-shadow` and every glow and shadow utility answers to the same
+      property.
+    - Disabled controls are readable: they were faded with six different values
+      of `opacity` across 79 places, measuring 2.23:1 and 1.94:1 against a
+      threshold of 4.5.
+    - The type scale has one bottom step instead of two, across 203 places.
+    - Borders belong to what you aim at, not to everything.
+
+    Four things this stage found are worth keeping in mind because they are
+    general, not cosmetic: elevation is relative while tokens are absolute, and
+    the same defect therefore arrived three times; a contrast measurement tells
+    you whether text on a surface is legible and never whether the surface is
+    visible; the application's own classes sat outside cascade layers and so
+    silently beat every Tailwind utility applied beside them; and `opacity` is
+    not a way to be disabled.
+
+    **What remains in Half A:** the five-viewport, three-shell sweep is still
+    browser-only — the Windows Tauri and Android WebView passes have not been
+    run. Six realtime channels bind several tables each and work only because
+    all their tables happen to be published; they are named in
+    `tests/unit/realtime-channel-tables.test.mts` so the risk is visible in the
+    tree rather than only in a report.
+
     **Progress as of 2026-09-03.** Half A's audit harness is
     `scripts/interface-audit.mjs`; it measures overflow, clipping, touch targets,
     contrast and focus visibility across the surface/viewport/theme matrix and
@@ -262,7 +299,42 @@ Use this queue before starting the next production-hardening turn. Do not repeat
 
 ## Last Confirmed Deploy Baseline
 
-- Production web code baseline: `5da93e0` (public home with downloads and the
+**Current: `8bff49f`, deployed 2026-09-05/06 in four staged pushes.** The
+staging was deliberate — the interface work changes how the whole product looks,
+and shipping it apart from the fixes means a regression points at one batch
+rather than at twelve commits.
+
+| batch | tip | what it carried |
+| --- | --- | --- |
+| 1 | `5fcc6dd` | Windows startup screen rebuilt with real TLS fingerprints; the storage relocation fix; the material foundation; chat sync repairs; the file name that arrived as the sender's caption |
+| 2 | `7837286` | `/privacy` printing in one column; the guest-session fixture dated from the run; a flake that was a race, not a threshold |
+| 3 | `0f3c0cd` | the cascade-layer move; seven interface findings closed; the fourth text colour |
+| 4 | `053aeb6` | the visual redesign: quieted material, glass that shows content, one focus language, the type scale, border discipline |
+| 5 | `8bff49f` | realtime channels split per table |
+
+Each batch was validated at its own commit before shipping — batches 2 and 3 in
+a throwaway worktree, because a green run on the full tree says nothing about
+whether a batch works **without** what sits above it. That caught three
+failures in batch 2 that turned out to be a missing production build, which the
+tests refuse to proceed without rather than passing trivially.
+
+Every deployment was verified by reading the running container's own image tag,
+its healthcheck and its replica count, and then by fetching the live stylesheet
+to confirm the change reached a reader. A webhook firing is not evidence that
+anyone received anything.
+
+Rollback is a fast-forward of `main` to the previous tip in that table.
+
+Three production database repairs were applied in the same window, each with a
+verified schema backup taken first and each ending in a check that raises
+rather than reporting success on a half-applied state. They are in
+`.migration-backup/supabase/migrations/`: `20260905140000` gave back the
+execute permission that had stopped **every** client upload for 37 hours;
+`20260905150000` fixed a UUID pattern of 8-4-4-12 that had made two storage
+paths unreachable since May; `20260906120000` and `20260906130000` published
+four tables whose realtime bindings had never delivered.
+
+- Previous baseline, superseded: `5da93e0` (public home with downloads and the
   compact Stable changelog, over the previous single-scroll folder editor,
   grouped emoji pickers, privacy-safe verified-phone search, Windows
   notification routing and chat-history anchoring baseline). `main` was
