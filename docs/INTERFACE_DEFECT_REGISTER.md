@@ -4072,6 +4072,140 @@ appearing at another width fails, this one growing fails, and closing it passes.
 The same test also asserts that the control is reachable once the shell is
 scrolled, which is the part that does hold today.
 
+## D-064 `[x]` The only way out of a conversation is unpaintable on the engine Safari uses
+
+**Severity:** critical, and it was live. A person on an installed PWA could open
+a chat and then had no way back to the chat list: no back control, no title, no
+avatar. Reported by a real user, not found in a sweep.
+
+**Surface:** the chat header in `ChatWindow.tsx`, and every desktop Safari too —
+this was never only a phone problem.
+
+**Defect:** the header, the conversation and the composer are three positioned
+boxes with `z-index: auto`, so paint order is decided by document order. The
+header came **first** in the markup and `order: -1` on the list was what put the
+list underneath it.
+
+`order` moves a flex item's paint position in Chromium. **WebKit does not apply
+it to positioned boxes at all.** Layout is identical in both engines — only
+paint differs — which is why no geometry measurement caught it.
+
+| list is | Chromium | WebKit |
+| --- | --- | --- |
+| `relative; order:-1` (as shipped) | chrome on top | **list on top** |
+| `relative; order:0` | list on top | list on top |
+| `static; order:-1` | chrome on top | chrome on top |
+
+Measured consequences on the real page in WebKit: the topmost element at the
+centre of the header was a **message bubble**; the centre of the back control
+hit-tested into that bubble; the header menu opened at neither 390 nor 1440.
+
+**Fix:** document order — the list first, the chrome after it — and `order: -1`
+removed. No stacking context, no `z-index`, no containing block touched.
+
+Two alternatives were rejected by measurement, not taste. `z-index` on the
+chrome or `isolation` on the column creates a stacking context and clamps every
+`fixed` overlay in the subtree — the header's menus and modals, the composer's
+camera and video recorder, a bubble's context menu — so a full-screen dialog
+would be covered by whichever of the two lost. A negative `z-index` on the list
+stops it being a hit-test target at all (`listHit=false` in both engines, both
+widths).
+
+**Cost, recorded rather than hidden:** the conversation now precedes its own
+header in reading order.
+
+**What it teaches:** this was a regression of the glass week, and the rule that
+recommended the `order` trick was in our own material contract. It is corrected
+there as rule 12. It also went unseen because the Playwright matrix had six
+projects and all six were Chromium; `webkit-mobile-390` exists now, and it found
+this on its first run.
+
+## D-065 `[x]` A utility three surfaces depended on was never declared
+
+**Severity:** high on every iPhone with a home indicator, and the owner reported
+it as "the bottom bar sits too low".
+
+**Surface:** the tab bar, the full-screen modal and the chat-list sheet, all of
+which carry `pb-safe`.
+
+**Defect:** `pb-safe` is not a Tailwind utility and nothing declared it. The
+string appears **zero times** in 219 KB of production stylesheet. All three
+surfaces therefore had no bottom inset and sat on the home indicator.
+
+**Fix:** `@utility pb-safe`, plus the tab bar's own height: boxes are
+`border-box`, so beside a flat `height: 56px` the new padding was subtracted
+from the tabs rather than added beneath them — six labelled icons at 22px with a
+34px indicator under them.
+
+**What it teaches:** a class name that resolves to nothing fails silently and
+looks deliberate in the source. The check that matters is the built stylesheet,
+not the JSX — `padding-bottom:env(safe-area-inset-bottom,0px)` now appears in
+the shipped CSS, and that is what was verified after deploying.
+
+## D-066 `[x]` The channel between the machines is a tube, and its traffic has no direction
+
+**Severity:** medium, cosmetic, and reported three times before it was read
+correctly. The owner said "the bar between the PC and the node still looks old";
+it was fixed twice on the wrong element first — the stage track at the bottom of
+the same screen — because the words "between the PC and the node" were not taken
+literally enough.
+
+**Surface:** the connection channel on the Windows startup screen, and the
+overlay that continues that scene on the production page.
+
+**Defect, two halves.**
+
+*Weight.* A 20px filled tube with a border and frosted material, a 20px filled
+junction under a 4px glow ring, two 14px bordered sockets each carrying a 3px
+ring of page colour — four dense objects in a row on a screen where everything
+else had already come down to a hairline. The 3px ring made an 8px socket 14px
+wide and read as a bead threaded onto a wire.
+
+*Direction.* The traffic highlight was a **symmetric** gradient — transparent,
+bright, transparent. A symmetric shape in motion cannot say which way it is
+going. It was also drawn once per half, so two lights ran in two boxes in
+different phases rather than one crossing the span.
+
+**Fix:** the channel is a 4px line matching `--track-height`, flat, tinted from
+the accent, no border and no `backdrop-filter` — a line has no behind to sample.
+Sockets and junction come to 8px. The sockets lose their ring, which existed to
+punch them out of a line they do not in fact sit on. The junction keeps a 1.5px
+ring while the handshake is open and drops it when connected, because a sealed
+handshake should read as one continuous run.
+
+Traffic is one element spanning socket to socket carrying a comet — bright
+leading edge, tail fading behind it. Verified by pausing the animation mid-span
+and photographing the still frame, which is the only test that matters for
+whether a direction is legible.
+
+**What it teaches:** two indicators on one screen could be redrawn one at a
+time, and were. `--conduit-height` and `--track-height` are now both 4px and a
+test pins that they agree, so that particular mistake cannot repeat.
+
+## D-067 Images do not render in Safari
+
+**Severity:** high, live, and reported by a real user. Open.
+
+**Surface:** message media in a conversation. The owner's screenshot shows an
+empty white rectangle of the correct size where a photograph should be — the box
+is laid out, the pixels are absent.
+
+**Reproduction:** the first run of the three image specs on `webkit-mobile-390`
+returned **five failures out of six**, against green in Chromium:
+`avatar-preview-sizing` (both cases), `media-gallery-variants` (the counted
+media rows), and `message-image-recovery` (fallback to the original, and
+recovery when the variant arrives).
+
+**Already ruled out by measurement, so nobody re-checks them:** `aspect-ratio`
+on the button with `height: 100%` on the image (both engines draw 270×152
+identically); `loading="lazy"` inside a nested scroller after a programmatic
+scroll (zero unrendered of six visible, both engines); the format — Safari has
+read WebP since 14.
+
+**Status:** under investigation. Whether five failures mean five defects, one
+defect, or specs written against Chromium is exactly what has to be established
+before anything is changed.
+
 ## Measured on the device, and not a defect
 
 **The scroll contracts hold, by finger rather than by wheel.** Chat entry with

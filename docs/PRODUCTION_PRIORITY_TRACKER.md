@@ -299,7 +299,46 @@ Use this queue before starting the next production-hardening turn. Do not repeat
 
 ## Last Confirmed Deploy Baseline
 
-**Current: `8bff49f`, deployed 2026-09-05/06 in four staged pushes.** The
+**Current: `4f67e45`, deployed 2026-09-06.** Verified the way every deployment
+in this stage was: by reading the running container's own image tag, its
+healthcheck and its replica count, and then by fetching a live asset to confirm
+the change reached a reader. A webhook firing is not evidence that anyone
+received anything.
+
+Three pushes went out after the staged interface batches below, each validated
+at its own commit:
+
+| tip | what it carried |
+| --- | --- |
+| `20feafc` | the flat stage track on the Windows startup screen |
+| `07b3c82` | Windows 0.2.12 |
+| `4f67e45` | the chat header WebKit fix, `pb-safe`, `Alt-Svc: clear`, Windows 0.2.13 |
+
+Two live checks worth repeating after any web deploy, because both have failed
+silently before: `curl -sI https://app.letscube.ru/index.html` must carry
+`Alt-Svc: clear` (nginx replaces the inherited `add_header` set rather than
+adding to it, so a location that grows a header of its own drops this one), and
+the served stylesheet must contain
+`padding-bottom:env(safe-area-inset-bottom,0px)` (`pb-safe` resolved to nothing
+at all for months and looked deliberate in the source).
+
+**HTTP/3 is off at the proxy as of 2026-09-06**, on the owner's instruction.
+Traefik advertised `Alt-Svc: h3=":443"; ma=2592000`, and a VLESS/REALITY tunnel
+carries TCP only — its iOS clients commonly drop UDP 443 so QUIC cannot leak
+around the proxy — so an affected browser spent a full connect timeout on every
+navigation for up to thirty days. The flag is removed from
+`/data/coolify/proxy/docker-compose.yml`, backed up beside it as
+`docker-compose.pre-http3-off.20260906-170416.yml`; rollback is that one flag
+and a proxy restart, which briefly drops every service. Nothing in the product
+needs UDP: no `RTCPeerConnection`, voice and video captured with `getUserMedia`
+and uploaded over HTTPS, realtime over a WebSocket.
+
+Two things checked and found irrelevant while diagnosing that, recorded so they
+are not checked again: the server does no IP, geo or fail2ban filtering of VPN
+exits, and ufw's missing `443/udp` rule does not matter because Docker's
+published-port DNAT runs ahead of ufw and did forward UDP.
+
+**Previous: `8bff49f`, deployed 2026-09-05/06 in four staged pushes.** The
 staging was deliberate — the interface work changes how the whole product looks,
 and shipping it apart from the fixes means a regression points at one batch
 rather than at twelve commits.
