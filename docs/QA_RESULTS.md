@@ -1,5 +1,53 @@
 # QA Results
 
+## 2026-09-06 - Windows 0.2.12 Stable release and byte verification
+
+Cut `0.2.12` / `desktopBuild` 16 (version pinned in `windows-tauri/package.json`,
+`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and the
+drift test). Built with `scripts/windows-tauri-updater-build.ps1`, which loads the
+signing identity from the ignored local key material and asserts it against
+`scripts/windows-updater-public.key` before running `tauri build`.
+
+Published from `/srv/letscube/releases/incoming/windows-0.2.12-16` on the server:
+the signed updater to `test`, promoted byte-identically to `stable`, then the
+download catalog as build 16 with a five-entry highlights list.
+
+```
+Published signed Windows updater test 0.2.12 (2366203 bytes, sha256 2251a7ee4e3117b5861b7ba9b8b4b7d95c3db1f63d2d17e8a31bbaa6767893a1)
+Published signed Windows updater stable 0.2.12 (2366203 bytes, sha256 2251a7ee4e3117b5861b7ba9b8b4b7d95c3db1f63d2d17e8a31bbaa6767893a1)
+Published windows stable 0.2.12 build 16 (2366203 bytes, sha256 2251a7ee4e3117b5861b7ba9b8b4b7d95c3db1f63d2d17e8a31bbaa6767893a1)
+```
+
+`node scripts/verify-public-release-artifact.mjs windows`, exit code 0:
+
+```
+windows 0.2.12: verified 2366203 bytes, sha256 2251a7ee4e3117b5861b7ba9b8b4b7d95c3db1f63d2d17e8a31bbaa6767893a1
+```
+
+That verifier only covers the download catalog, so the updater side was checked
+separately by replaying what an installed client does. Using the `pubkey` read
+out of `tauri.conf.json` **as it stood at `8c39af4`, the 0.2.11 cut**, the stable
+updater endpoint returns `0.2.12`, the SemVer gate offers the update,
+`mandatory` is false with no `minimumSupportedVersion`, the artifact at the
+manifest URL hashes to the manifest SHA-256, and the signature carried in the
+manifest verifies against that 0.2.11 key over the downloaded bytes. Server-side
+`minisign -Vm` reported `Signature and comment signature verified` for the same
+bundle before publication. The updater public key is unchanged since the 0.2.11
+cut, so no installed client has to learn a new signer.
+
+Two things worth recording rather than rediscovering:
+
+- 0.2.11 was published to production on 2026-09-04 (all three live manifests
+  carried it) but no QA or tracker entry was ever written, so the documentation
+  read as though 0.2.10 were current. Live manifests, not docs, are the
+  authority for what is deployed.
+- `pnpm.cmd windows:tauri:qa` serves `artifacts/kub/dist/public` and cannot sign
+  in when that bundle was built without `VITE_SUPABASE_URL` /
+  `VITE_SUPABASE_ANON_KEY`; it renders the "Подключение к серверу не настроено"
+  screen and the login form never appears. Rebuilding the bundle with the public
+  client configuration is a prerequisite of that suite, not an app defect.
+
+
 ## 2026-09-01 - Public release artifact byte verification
 
 Ran `node scripts/verify-public-release-artifact.mjs windows android macos ios`
