@@ -111,8 +111,8 @@ test("Windows release version and build metadata stay aligned", () => {
   const libRs = readText("windows-tauri/src-tauri/src/lib.rs");
   const publisherPublicKey = readText("scripts/windows-updater-public.key").trim();
 
-  assert.equal(shellPackage.version, "0.2.13");
-  assert.equal(shellPackage.desktopBuild, 17);
+  assert.equal(shellPackage.version, "0.2.14");
+  assert.equal(shellPackage.desktopBuild, 18);
   assert.equal(tauriConfig.version, shellPackage.version);
   assert.equal(cargoVersion, shellPackage.version);
   assert.equal(tauriConfig.plugins.updater.pubkey, publisherPublicKey);
@@ -1017,12 +1017,35 @@ test("production startup handoff keeps one stable scene long enough to read", ()
   assert.match(css, /\.startup-overlay-port-client\s*\{\s*right:\s*calc\(-1 \* var\(--node-offset\)\);\s*\}/);
   assert.match(
     css,
-    /\.startup-overlay-rail:first-child\s*\{[^}]*left:\s*calc\(25% - var\(--column-shift\) \+ var\(--device-half\) \+ var\(--node-offset\)\);/s,
+    /\.startup-overlay-rail-left\s*\{[^}]*left:\s*calc\(25% - var\(--column-shift\) \+ var\(--device-half\) \+ var\(--node-offset\)\);/s,
   );
   assert.match(
     css,
-    /\.startup-overlay-rail:last-child\s*\{[^}]*right:\s*calc\(25% - var\(--column-shift\) \+ var\(--node-half\) \+ var\(--node-offset\)\);/s,
+    /\.startup-overlay-rail-right\s*\{[^}]*right:\s*calc\(25% - var\(--column-shift\) \+ var\(--node-half\) \+ var\(--node-offset\)\);/s,
   );
+  // Neither half may be selected by its position among its siblings.
+  //
+  // These two rules were `:first-child` and `:last-child` until 2026-09-06.
+  // Adding one element to the wrapper — the travelling highlight, appended
+  // last — made `:last-child` match nothing, and the right rail lost every
+  // `left`/`right` it had and collapsed to zero width. The right half of the
+  // channel, from the junction to the node, simply stopped being drawn on the
+  // production page. The startup window names its halves and the identical
+  // edit did not touch it, which is why the startup geometry passed while the
+  // overlay's failed.
+  //
+  // A rule keyed to sibling position is a rule that breaks when someone adds a
+  // sibling, and nothing about adding one says it should be read.
+  for (const [label, sheet] of [
+    ["startup-overlay.css", css],
+    ["startup.css", readText("windows-tauri/ui/startup.css")],
+  ]) {
+    assert.doesNotMatch(
+      sheet.replace(/\/\*[\s\S]*?\*\//g, ""),
+      /rail[a-z-]*:(?:first|last|nth)-child/,
+      `${label} positions a rail by its position among its siblings`,
+    );
+  }
   // The constants must hold the same values in both scenes, so the two cannot
   // drift apart one number at a time.
   const startupCss = readText("windows-tauri/ui/startup.css");

@@ -2049,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "letscube-windows-tauri"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "reqwest",
  "semver",
