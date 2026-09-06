@@ -36,6 +36,18 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 3840, height: 2160 } },
     },
     {
+      // The narrow end of the matrix, and it was missing until D-058, D-060 and
+      // D-061 all came in from below 390 on a phone that is 360 CSS pixels wide
+      // — three of five findings from a width nothing had ever been checked at.
+      // 360x800 is that phone: 720x1600 physical at density 320.
+      name: "chromium-mobile-360",
+      use: {
+        ...devices["Pixel 7"],
+        viewport: { width: 360, height: 800 },
+        deviceScaleFactor: 2,
+      },
+    },
+    {
       name: "chromium-mobile-390",
       use: {
         ...devices["Pixel 7"],

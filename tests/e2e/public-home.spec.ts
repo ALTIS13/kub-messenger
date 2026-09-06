@@ -10,13 +10,17 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  * no release offers nothing to press and claims nothing about a store.
  */
 
-// Step 7 of the plan names these four; the 3840 project is a scaling check that
-// this contract does not add anything to.
+// Step 7 of the plan names four of these; the 3840 project is a scaling check
+// that this contract does not add anything to. `chromium-mobile-360` was added
+// on 2026-09-06 — the matrix stopped at 390 and the first Android walk found
+// three defects below it, so a public surface that makes availability claims is
+// the last place that should go on being unchecked at the narrowest width.
 const COVERED_PROJECTS = [
   "chromium-desktop-1920",
   "chromium-desktop-1440",
-  "chromium-mobile-390",
   "chromium-mobile-412",
+  "chromium-mobile-390",
+  "chromium-mobile-360",
 ];
 
 const SCROLL_ROOT = '[data-testid="public-scroll-root"]';

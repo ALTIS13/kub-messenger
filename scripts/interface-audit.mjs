@@ -33,8 +33,12 @@ const ALL_VIEWPORTS = [
   { name: "3840x2160", width: 3840, height: 2160, mobile: false },
   { name: "1920x1080", width: 1920, height: 1080, mobile: false },
   { name: "1440x900", width: 1440, height: 900, mobile: false },
-  { name: "390x844", width: 390, height: 844, mobile: true },
   { name: "412x915", width: 412, height: 915, mobile: true },
+  { name: "390x844", width: 390, height: 844, mobile: true },
+  // The narrowest phone the product is actually installed on: 720x1600 at
+  // density 320 is 360 CSS pixels. The matrix stopped at 390 until D-058,
+  // D-060 and D-061 all arrived from below it in one walk on the device.
+  { name: "360x800", width: 360, height: 800, mobile: true },
 ];
 
 const ALL_SURFACES = [

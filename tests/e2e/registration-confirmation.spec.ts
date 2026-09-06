@@ -4,8 +4,12 @@ import { gotoOrSkip } from "./helpers/auth";
 const confirmationVisualProjects = new Set([
   "chromium-desktop-1440",
   "chromium-desktop-1920",
-  "chromium-mobile-390",
   "chromium-mobile-412",
+  "chromium-mobile-390",
+  // The narrowest phone in the matrix since 2026-09-06. A countdown control
+  // that has to stay reachable and unclipped is exactly the shape of thing the
+  // 360-wide blind spot was hiding.
+  "chromium-mobile-360",
 ]);
 
 test.describe("Registration confirmation", () => {
