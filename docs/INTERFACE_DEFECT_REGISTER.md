@@ -4184,27 +4184,103 @@ test pins that they agree, so that particular mistake cannot repeat.
 
 ## D-067 Images do not render in Safari
 
-**Severity:** high, live, and reported by a real user. Open.
+**Severity:** high, live, and reported by a real user. Open, and now known not
+to be what the first run of the suite suggested it was.
 
 **Surface:** message media in a conversation. The owner's screenshot shows an
 empty white rectangle of the correct size where a photograph should be — the box
 is laid out, the pixels are absent.
 
-**Reproduction:** the first run of the three image specs on `webkit-mobile-390`
-returned **five failures out of six**, against green in Chromium:
-`avatar-preview-sizing` (both cases), `media-gallery-variants` (the counted
-media rows), and `message-image-recovery` (fallback to the original, and
-recovery when the variant arrives).
+**The reported symptom is not reproduced.** On `webkit-mobile-390` against a
+signed-in production session, every picture in the QA conversation loads and
+paints, and it paints the *same pixels* Chromium paints: element screenshots of
+the three message pictures give per-channel means of 25.1/31.9/45.2 in WebKit
+against 25.2/32.0/45.3 in Chromium, and standard deviations within 0.2 of each
+other. A picture that decoded but was not painted would show as a flat field
+here, and none did.
 
-**Already ruled out by measurement, so nobody re-checks them:** `aspect-ratio`
-on the button with `height: 100%` on the image (both engines draw 270×152
-identically); `loading="lazy"` inside a nested scroller after a programmatic
-scroll (zero unrendered of six visible, both engines); the format — Safari has
-read WebP since 14.
+**The five failures were not five defects. None of them was a product defect.**
+The first run was made against a dev server pointed at `VITE_SUPABASE_URL=
+http://127.0.0.1:54321`, where nothing is listening, so four of the five never
+reached an image assertion at all — they died at sign-in with the login form
+reading "Сетевой сбой. Проверьте подключение и попробуйте ещё раз." Chromium was
+never run against that same server; when it is, it fails identically, which is
+what settles it. Re-measured one at a time against a server on
+`https://core.letscube.ru`:
 
-**Status:** under investigation. Whether five failures mean five defects, one
-defect, or specs written against Chromium is exactly what has to be established
-before anything is changed.
+| case | verdict | evidence |
+| --- | --- | --- |
+| `avatar-preview-sizing:31` dense avatar surface | test | `browserContext.newCDPSession: CDP session is only available in Chromium` |
+| `avatar-preview-sizing:65` someone else's variant | environment | passes once the server has a backend |
+| `media-gallery-variants:21` counted media rows | environment | passes once the server has a backend; Chromium failed the same way on the same server |
+| `message-image-recovery:88` variant falls back | test | fails in **both** engines: "no variant request was intercepted" |
+| `message-image-recovery:135` first request recovers | test | fails in **both** engines: "no original request was intercepted" |
+
+**Three test faults were found behind them, and all three are fixed.**
+
+1. *Nothing was ever brought into the viewport.* `MediaImage` renders
+   `loading="lazy"`, and the QA conversation opens at the bottom with its
+   photographs measured at `top: -5138`. Both recovery cases therefore issued no
+   image request at all and failed on their own "nothing was tested" guards, in
+   both engines. `toBeVisible()` does not mean "in the viewport" and cannot
+   stand in for it.
+2. *A service worker hides requests from `page.route` in WebKit.* Measured on
+   one page and one address: while `navigator.serviceWorker.controller` was
+   still null the image was intercepted; after a reload made the worker the
+   controller the same request was reported by `page.on("request")` and never
+   handed to the route. Chromium intercepted both. Every interception-based
+   case therefore has to run with `test.use({ serviceWorkers: "block" })`, which
+   costs nothing because `sw.js` returns early for every Supabase address.
+3. *`.first().or(...)` narrows the wrong side.* Written that way it only
+   narrowed the left-hand locator, so the moment the user list had drawn more
+   than one avatar the union resolved to eight elements and the case died of a
+   strict mode violation. Chromium reached the assertion a beat earlier, with
+   one badge on screen, which is why only WebKit showed it.
+
+The suite now reports 6/6 on `webkit-mobile-390` and 6/6 on
+`chromium-mobile-390`, against 1/6 before.
+
+**Proved by mutation, each with the file hash read before and after so a
+mutation that did not apply cannot look like a pass.** Removing the fallback to
+the original from `MediaImage.handleError` turns both recovery cases red in both
+engines; making `handleError` a no-op — which leaves exactly the reserved-but-
+empty box the owner photographed — turns them red on the new
+`unpaintedInViewport` assertion; resolving no avatar variant at all turns the
+avatar case red in both engines, where the old network-shaped assertion could
+not have failed in WebKit at all. Every hash was checked back to its original
+afterwards. One weaker mutation survived and is recorded because it is
+instructive: blanking only the avatar `src` left `srcset` carrying the variants,
+so the picture still resolved to one — the contract lives in both attributes.
+
+**Ruled out by measurement, so nobody re-checks them:** `aspect-ratio` on the
+button with `height: 100%` on the image (both engines draw 270×152 identically);
+`loading="lazy"` inside a nested scroller after a programmatic jump (three of
+three in-viewport pictures loaded in both engines; WebKit is in fact the *less*
+lazy of the two, loading 40 of 40 where Chromium loaded 25); the format — Safari
+has read WebP since 14; `onerror` semantics for a failed `srcset` candidate,
+whether 404, aborted, malformed by a comma, or with every candidate missing
+(identical in both engines, and the error fires in all of them, so the product's
+fallback runs); recovery after a failure by dropping `srcset` and repointing
+`src` (identical); the service worker as a *product* path — it returns early for
+every Supabase address and never touches a media object.
+
+**What is still unexplained, and where to look next.** The owner's picture has
+not been reproduced, and the QA conversation is too small to hunt in — five
+pictures, all of which paint. Two things are worth measuring on the owner's own
+message rather than guessed at:
+
+- The `srcset` descriptors in `MediaImage` are hardcoded `360w` and `1280w`
+  whatever the variants actually are. Measured, the preview in the QA chat is
+  **154×335** while it is advertised as `1280w`, so on a DPR-3 phone the browser
+  is told to expect eight times the pixels it gets. That mis-selection is a real
+  wart and is worth fixing on its own, but it produces a blurry picture, not an
+  empty one, so it is not yet the report.
+- A bubble only reserves its box when the variant row carries dimensions, so the
+  reported symptom is specifically *variant row present, pixels absent*. The one
+  state that produces it silently — no error box, no pixels — is a load that
+  never starts or never finishes. Worth checking against a real iOS device
+  rather than Playwright's WebKit, which does not carry iOS's decoded-image
+  limits.
 
 ## Measured on the device, and not a defect
 
