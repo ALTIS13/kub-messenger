@@ -1,5 +1,83 @@
 # QA Results
 
+## 2026-09-06 - Windows 0.2.13 Stable release, and the QA gate it had to fix first
+
+Cut `0.2.13` / `desktopBuild` 17 for one change: the flat stage track on the
+connection screen, which landed in `5f1a0d4` *after* 0.2.12 was built, so 0.2.12
+still showed the old bevelled one. That track is compiled into the shell, so a
+build is the only thing that ships it. Nothing else in `windows-tauri/` moved
+between `07b3c82` and this cut.
+
+Published from `/srv/letscube/releases/incoming/windows-0.2.13-17`:
+
+```
+Published signed Windows updater test 0.2.13 (2366043 bytes, sha256 3a0134cfaf305e34f64adcf50271685108eadb385ac5895ef1fd3fd5e5384752)
+Published signed Windows updater stable 0.2.13 (2366043 bytes, sha256 3a0134cfaf305e34f64adcf50271685108eadb385ac5895ef1fd3fd5e5384752)
+Published windows stable 0.2.13 build 17 (2366043 bytes, sha256 3a0134cfaf305e34f64adcf50271685108eadb385ac5895ef1fd3fd5e5384752)
+```
+
+`node scripts/verify-public-release-artifact.mjs windows`, exit code 0:
+
+```
+windows 0.2.13: verified 2366043 bytes, sha256 3a0134cfaf305e34f64adcf50271685108eadb385ac5895ef1fd3fd5e5384752
+```
+
+Four independent readings agree on those bytes, which is the point of doing more
+than one: the publisher's own report, the verifier streaming the download
+catalog, a plain `curl` of each of the two public URLs hashed separately, and a
+full `cmp` of both downloads against the locally built installer. The download
+copy and the updater copy are byte-identical to each other and to the artifact
+that was signed here.
+
+The updater path was replayed the way an installed client walks it, using the
+`pubkey` read out of `tauri.conf.json` **as it stood at `07b3c82`, the 0.2.12
+cut** — the key a 0.2.12 installation actually holds. Stable returns `0.2.13`,
+the SemVer gate offers it, `mandatory` is false with no `minimumSupportedVersion`,
+the artifact at the manifest URL hashes to the manifest SHA-256, and the
+signature carried *in the manifest* verifies against that 0.2.12 key over the
+downloaded bytes. Server-side `minisign -Vm` reported `Signature and comment
+signature verified` before publication. The key is unchanged since 0.2.11, so no
+installed client has to learn a new signer. The verifier used for this was itself
+checked in both directions first: it accepts the already-published 0.2.12, and
+refuses both a different file and the same file with one bit flipped.
+
+**The release was blocked first, and the block was real.** `pnpm.cmd
+windows:tauri:qa` failed on `critical_update`: the helper `loginIfNeeded` uses to
+confirm a session reported a signed-in client as signed out, and the scenario
+burned its whole 45s budget. The screenshot showed the app signed in with the
+mandatory-update gate correctly on screen, so the product was right and the test
+was wrong. Cause: `inert` and `aria-hidden` do not hide an element, they take it
+out of the accessibility tree, and `MainLayout` puts both on `desktop-app-shell`
+while the gate is up — so `getByRole("button", { name: "Меню" })` could not reach
+a button that was drawn and visible.
+
+It was confirmed pre-existing rather than a regression by stashing the version
+bump, rebuilding the shell at 0.2.12 and reproducing the identical failure on the
+version already in production. Fixed in `52abfdb` by racing a `desktop-app-shell`
+fallback alongside the role query. `app-top-bar` was rejected as the fallback:
+`PublicPreviewCapturePage` renders `AppTopBar` on a public route, so it can be on
+screen with no session behind it.
+
+Two things worth recording rather than rediscovering:
+
+- A mutation aimed at the gate's UI proves nothing here. `windows-tauri-startup.spec.ts`
+  drives the shell to `https://app.letscube.ru`, not to `artifacts/kub/dist/public`,
+  so editing `MainLayout.tsx` and rebuilding the local bundle left the scenario
+  green while looking like a mutation that had been applied. Only `baseline`
+  (`windows-tauri-shell.spec.ts`) serves the local build. What does bite: inverting
+  the spec's own `inert` assertion, which turns the scenario red against a shell
+  reported as `inert="" aria-hidden="true"`, and flipping the shell's injected
+  `set_mandatory(true)` to false, which turns it red too. Every mutation was
+  checked by SHA-256 before and after, on both the source and the built bundle.
+- `pnpm.cmd windows:tauri:qa` cannot sign in when `artifacts/kub/dist` was built
+  without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`; it renders the
+  "Подключение к серверу не настроено" screen and no login form appears.
+  Rebuilding that bundle with the public client configuration is a prerequisite
+  of the suite, not an app defect. This cost time in the 0.2.12 cut as well.
+
+Authenticode is still not applied. That remains an open packaging item, not a
+regression: SmartScreen treats 0.2.13 exactly as it treated 0.2.12.
+
 ## 2026-09-06 - Windows 0.2.12 Stable release and byte verification
 
 Cut `0.2.12` / `desktopBuild` 16 (version pinned in `windows-tauri/package.json`,
