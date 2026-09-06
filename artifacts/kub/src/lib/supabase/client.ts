@@ -3,21 +3,24 @@ import {
   type SupabaseClient,
 } from '@supabase/supabase-js'
 import type { Database } from '@/types/database'
+import { resolveSupabaseConfig, type SupabasePublicEnv } from './config'
 
 // Read Supabase config from Vite env vars.
 // Accept both the new `VITE_SUPABASE_PUBLISHABLE_KEY` name and the legacy
 // `VITE_SUPABASE_ANON_KEY` so the app keeps working regardless of which
 // secret name is configured in Replit.
-const env = import.meta.env as Record<string, string | undefined>
-const SUPABASE_URL = env.VITE_SUPABASE_URL
-const SUPABASE_KEY =
-  env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY
+//
+// The resolution itself lives in `./config`, which imports nothing and is
+// therefore reachable from the unit suite; see the note there for what went
+// untested while it was inline here.
+const { url: SUPABASE_URL, key: SUPABASE_KEY, configured: SUPABASE_CONFIGURED } =
+  resolveSupabaseConfig(import.meta.env as SupabasePublicEnv)
 
 const MISSING_SUPABASE_CONFIG_ERROR =
   "Supabase runtime configuration is missing. Build the app with the public Supabase URL and publishable key."
 
 export function isSupabaseConfigured(): boolean {
-  return Boolean(SUPABASE_URL && SUPABASE_KEY)
+  return SUPABASE_CONFIGURED
 }
 
 export function getSupabasePublicUrl(): string {
