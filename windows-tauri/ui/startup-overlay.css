@@ -41,14 +41,17 @@
   --startup-font-mono: Consolas, 'Cascadia Mono', Menlo, monospace;
   /* The same four values as startup.css, for the same reason the geometry is
      shared: this scene continues that one, and a panel that changed substance
-     across the handoff would say the connection had changed with it. */
-  --glass-fill: rgba(17, 43, 71, .70);
-  --glass-fill-strong: rgba(17, 43, 71, .96);
-  --glass-line: rgba(255, 255, 255, .14);
-  --glass-blur: blur(18px) saturate(122%);
+     across the handoff would say the connection had changed with it. They were
+     not the same four — a denser fill, a brighter edge and 18px of blur here
+     against a quieter fill and 20px there, with the application a third answer
+     again — which is what the comment above always claimed and no test read. */
+  --glass-fill: rgba(17, 43, 71, 0.46);        /* index.css --glass-fill */
+  --glass-fill-strong: rgba(17, 43, 71, 0.96); /* index.css --glass-fill-strong */
+  --glass-line: rgba(255, 255, 255, 0.10);     /* index.css --glass-line */
+  --glass-blur: blur(20px) saturate(122%);     /* index.css --glass-blur */
   --glass-shadow:
-    0 20px 44px -26px rgb(0 0 0 / .9),
-    0 3px 10px -6px rgb(0 0 0 / .55),
+    0 20px 44px -26px rgba(0, 0, 0, 0.9),
+    0 3px 10px -6px rgba(0, 0, 0, 0.55),
     inset 0 1px 0 var(--glass-line);
 
   --verify-accent: var(--kub-cyan);
@@ -97,8 +100,32 @@
 }
 
 .startup-overlay-handshake { position: relative; display: grid; grid-template-columns: 1fr 34px 1fr; align-items: center; width: 100%; max-width: 980px; margin: 0 auto; isolation: isolate; }
+/* Centred rather than stretched, and that has to come before the pane below it.
+   The grid item was filling the whole middle band — 662px against the 277px it
+   lays out — so a pane drawn around it would have covered the title bar and the
+   status line, which is the mistake startup.css records beside its own copy of
+   these two lines. Both spellings, same fallback pattern as align-content:
+   `safe` sends any overflow downwards instead of splitting it across the title
+   bar, and the plain value is there for an engine that drops the keyword. */
+.startup-overlay-handshake { align-self: center; }
+.startup-overlay-handshake { align-self: safe center; }
 .startup-overlay-handshake { align-content: center; }
 .startup-overlay-handshake { align-content: safe center; }
+/* The pane the scene sits on, which the startup window has and this one did
+   not: the same inset, radius and material, so the surface the person is
+   looking at does not vanish at the handoff. See .handshake::before in
+   startup.css for why it is a pseudo-element expanding past the grid rather
+   than padding on it — padding would resolve the rails' percentages against a
+   different box and pull every rail off its socket. */
+.startup-overlay-handshake::before {
+  content: ""; position: absolute; z-index: -1; pointer-events: none;
+  inset: -34px -44px; border-radius: 20px;
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--glass-shadow);
+}
 .startup-overlay-endpoint { display: grid; grid-template-rows: 74px 20px 126px 20px 19px 4px 14px; justify-items: center; align-content: center; min-width: 0; }
 .startup-overlay-endpoint-client { grid-column: 1; }
 .startup-overlay-endpoint-server { grid-column: 3; }
@@ -244,7 +271,17 @@
 .is-connected .startup-overlay-detail { stroke: var(--verify-accent); }
 
 .startup-overlay-state { display: grid; align-content: start; justify-items: center; border-top: 1px solid var(--kub-border-color); padding-top: 20px; }
-.startup-overlay-status { margin: 0 0 14px; color: var(--kub-text); font-size: 14px; line-height: 18px; text-align: center; }
+/* The same line as #startup-status in startup.css, down to the letterspacing.
+   It was left at the 14px this line used to be when the startup window's copy
+   was raised to 19px, and the cost was not only the type: the state row is the
+   `auto` row under a `1fr` band whose content is centred, so four pixels of
+   height here moved the whole handshake two pixels down at the handoff. The
+   shell's own baseline QA measures exactly that and was failing on it. */
+.startup-overlay-status {
+  margin: 0 0 12px; color: var(--kub-text);
+  font-size: 19px; font-weight: 620; line-height: 24px; letter-spacing: -.01em;
+  text-align: center;
+}
 .startup-overlay-scope { margin: 0 0 16px; width: min(680px, 78vw); color: var(--kub-muted); font-size: 11.5px; line-height: 15px; text-align: center; }
 /* The same single recessed track as startup.css. This scene continues the
    startup window's, so the indicator may not change shape at the handoff. The

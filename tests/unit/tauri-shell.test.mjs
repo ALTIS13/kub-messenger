@@ -34,7 +34,14 @@ function evaluateStartupHelper(source, name, dependencies = []) {
   return vm.runInNewContext(`${program}\n${name}`);
 }
 
-/* `--kub-x: #hex;` declarations of one CSS block, as a Map. */
+/* `--kub-x: #hex;` declarations of one CSS block, as a Map.
+ *
+ * `glass` is in the prefix list beside `kub`, and it is the half that was
+ * missing. The four values that decide what the surfaces are made of are named
+ * --glass-*, so a pattern that only knew --kub-, --brand- and --app- compared
+ * the palette while leaving the material unguarded — and the three copies of
+ * it drifted apart under a green suite. Proved by mutation: --glass-fill could
+ * be set to opaque red in startup.css and nothing here noticed. */
 function collectTokens(css, blockPattern) {
   // Comments are blanked before the block is read. A prose sentence naming a
   // token — "deliberately not --kub-surface-2: that one also means ..." — is a
@@ -45,8 +52,11 @@ function collectTokens(css, blockPattern) {
   const source = css.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "));
   const block = source.match(blockPattern)?.[0] ?? "";
   const tokens = new Map();
-  for (const [, name, value] of block.matchAll(/(--(?:kub|brand|app)-[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
-    tokens.set(name, value.trim());
+  for (const [, name, value] of block.matchAll(/(--(?:kub|brand|app|glass)-[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
+    // --glass-shadow is three shadows on three lines. Newlines and the
+    // indentation after them are not part of the value, so they are collapsed
+    // before the comparison; anything else that differs is a real difference.
+    tokens.set(name, value.replace(/\s+/g, " ").trim());
   }
   return tokens;
 }

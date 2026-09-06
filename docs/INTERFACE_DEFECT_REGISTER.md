@@ -3261,3 +3261,304 @@ summarises, and the mode button itself. Confirmed pre-existing by reverting
 `AudioSettingsSection.tsx` to `HEAD` and re-running — it fails identically — and
 the file was restored to the same SHA-256 afterwards. It is a locator that
 needs narrowing, not a product defect, and it belongs to whoever owns that spec.
+
+## The Windows shell, walked for the first time since the redesign
+
+Found 2026-09-06. The interface stage was verified in a browser; the Tauri
+WebView2 shell is the second of the three shells and had not been walked.
+Everything below was measured inside the real shell — WebView2 Runtime
+**152.0.4191.62**, the debug build of `letscube-windows-tauri 0.2.11`, driven
+over the harness's own loopback CDP port — and not in a browser standing in for
+it.
+
+The startup window and the overlay that continues its scene on the production
+page are two copies of one design with no build step between them, so the only
+thing holding them together is a test. Four of these five findings are what that
+test was not reading.
+
+## D-054 `[x]` The scene drops two pixels at the handoff, and the headline shrinks with it
+
+**Severity:** medium. Every cold start of the Windows client, every account.
+
+**Reproduction:** `pnpm.cmd windows:tauri:qa`. The `baseline` scenario fails at
+`tests/e2e/windows-tauri-shell.spec.ts:208` —
+`expect(overlayGeometry.snapshot).toEqual(geometry.snapshot)`, the assertion that
+the two halves of the scene are the same scene. It has been in the spec since
+`85bec05`, long before the redesign, and the redesign broke it.
+
+**Surface:** `windows-tauri/ui/startup-overlay.css:247` before the fix, against
+`windows-tauri/ui/startup.css:509`.
+
+**Defect:** `466c4b2` raised the startup window's status line — "the one place
+the eye should land first" — from 14px to 19px and gave it weight 620. The
+overlay's copy of that line stayed at 14px. The two rules are two hundred and
+fifty lines apart in two files, and nothing compares them.
+
+**Measured** at 1360x860, both sides photographed in the same window in one run:
+
+| | startup window | overlay |
+| --- | --- | --- |
+| status `font-size` | **19px** | **14px** |
+| status `font-weight` | **620** | **400** |
+| status `line-height` | 24px | 18px |
+| status `margin-bottom` | 12px | 14px |
+| state row height | **132px** | **128px** |
+
+Those four pixels are the whole mechanism. The scene is
+`grid-template-rows: 44px minmax(0, 1fr) auto` in both files and the handshake is
+centred in the `1fr` band, so a state row four pixels shorter hands the band four
+more pixels and moves everything centred in it down by half of them:
+
+| | startup window | overlay | drift |
+| --- | --- | --- | --- |
+| `computer.top` | 328.5 | 330.5 | **+2** |
+| `server.top` | 328.5 | 330.5 | **+2** |
+| `seal.top` | 381.5 | 383.5 | **+2** |
+| `clientPort.top` | 384.5 | 386.5 | **+2** |
+| `serverPort.top` | 384.5 | 386.5 | **+2** |
+
+`left`, `width` and `height` are identical on all five, which is what says the
+cause is the row underneath rather than the assembly itself.
+
+At the 640px minimum height the `@media (max-height: 720px)` block already put
+both margins at 12px, so there the delta is the line height alone — six pixels,
+three of drift. Wrong in both cases, and one rule.
+
+**Consequence:** the last thing the startup window shows and the first thing the
+overlay shows are the same sentence at two different sizes and two different
+weights, and the assembly above it steps down as the page changes.
+
+**Fixed** by giving `.startup-overlay-status` the startup window's metrics,
+letterspacing included. Re-measured in the same way afterwards: drift `0` on all
+five boxes, state-row delta `0`, and both status lines `19px / 620 / 24px / 12px`.
+
+## D-055 `[x]` The pane the scene stands on does not exist on the other side
+
+**Severity:** medium. Same reproduction and the same moment as D-054, and the
+larger half of it to look at.
+
+**Surface:** `windows-tauri/ui/startup.css:209`, `.handshake::before`. There was
+no counterpart anywhere in `windows-tauri/ui/startup-overlay.css`.
+
+**Defect:** the startup window draws the handshake on a glass pane, and its own
+comment gives two reasons that are both load-bearing: the band between the title
+bar and the divider is taller than the 277px the endpoint column needs, so
+without a container the surplus reads as ninety pixels of nothing under the
+labels; and a translucent surface with no edge is not a surface, it is a lighter
+patch of background. The overlay drew the same scene on nothing at all.
+
+**Measured**, the same element on both sides:
+
+| | startup window | overlay, before | overlay, after |
+| --- | --- | --- | --- |
+| handshake box | 980 x **277** | 980 x **662** | 980 x **277** |
+| handshake `top` | 234.5 | 44 | 234.5 |
+| pane behind it | `--glass-fill`, 20px radius, lit edge, shadow | **none** | the same four values |
+
+Look at `output/windows-shell-audit/shots/01-startup-pending.png` beside
+`05-overlay.png`: a panel with a rounded lit edge in the first, and in the second
+the same drawing floating on the page. `after-01` and `after-05` are the pair
+after the fix.
+
+The 662 is why the pseudo-element could not simply be added. The overlay's grid
+item was stretching to the full band instead of standing at its content height,
+so a pane at `inset: -34px -44px` around it would have covered the title bar and
+the status line — which is exactly the mistake `startup.css` records beside its
+own `align-self: center`. Those two lines had to be copied first, and the pane
+after them.
+
+## D-056 `[x]` Three copies of the material, three different answers
+
+**Severity:** medium. Every surface of the Windows startup screen and of the
+overlay, against the application they hand over to.
+
+**Surface:** `artifacts/kub/src/index.css:404` (`.dark`),
+`windows-tauri/ui/startup.css:75` and `windows-tauri/ui/startup-overlay.css:44`,
+all before the fix.
+
+**Defect:** `windows-tauri/ui` is served as-is with no build step, so it cannot
+import the application's stylesheet and the tokens are copied by hand. Both files
+say so at the top, and the overlay adds that its four values are "the same four
+values as startup.css". Neither claim was true, and the application was a third
+answer again.
+
+**Measured** — read back from `getComputedStyle` in the running WebView2, not
+only from the files:
+
+| token | `index.css` `.dark` | `startup.css` | `startup-overlay.css` |
+| --- | --- | --- | --- |
+| `--glass-fill` | `rgba(17, 43, 71, 0.46)` | `rgba(11, 33, 58, .56)` | `rgba(17, 43, 71, .70)` |
+| `--glass-fill-strong` | `rgba(17, 43, 71, 0.96)` | `rgba(8, 22, 41, .86)` | `rgba(17, 43, 71, .96)` |
+| `--glass-line` | `rgba(255, 255, 255, 0.10)` | `rgba(255, 255, 255, .09)` | `rgba(255, 255, 255, .14)` |
+| `--glass-blur` | `blur(20px) saturate(122%)` | `blur(18px) saturate(122%)` | `blur(18px) saturate(122%)` |
+
+Three fills on two different base surfaces, a lit edge at three weights, and two
+blur radii. `--glass-fill-strong` is the one the startup window had furthest
+wrong: `--kub-surface` where the other two use `--kub-surface-3`, and in this
+theme `--kub-surface` is the darker of the two, so a covering surface there read
+as a recess in the panel it opened over. That is the failure the `@supports`
+fallback note in `index.css` describes, arriving by a different road.
+
+**Fixed** by copying the application's values verbatim into both files.
+`--glass-shadow` came with them: it was spelled `rgb(0 0 0 / .9)` in the shell
+and `rgba(0, 0, 0, 0.9)` in the application — one colour, two spellings — and a
+copy checked by string comparison cannot afford either spelling to be a matter of
+taste. Photographed afterwards at 1360x860: the startup window's pane is still
+plainly a pane at the quieter fill, and the two scenes now show the same one.
+
+## D-057 `[x]` The test that guards those copies never read the material
+
+**Severity:** medium, and it is the reason D-056 could exist.
+
+**Surface:** `tests/unit/tauri-shell.test.mjs:47`, the pattern inside
+`collectTokens`:
+
+```
+/(--(?:kub|brand|app)-[a-z0-9-]+)\s*:\s*([^;]+);/g
+```
+
+**Defect:** the test is called "the startup scenes carry the application's
+tokens" and it compares every token whose name it recognises. It recognised
+`--kub-`, `--brand-` and `--app-`. The four values that decide what the surfaces
+are made of are named `--glass-`, so the palette was guarded and the material was
+not.
+
+**Proved by mutation**, comparing the file's SHA-256 before and after each
+substitution as rule 9 requires — `output/windows-shell-audit/mutate.mjs`, which
+refuses to judge when the anchor is not unique and restores the file afterwards:
+
+| mutation | sha before → after | suite, before | suite, after |
+| --- | --- | --- | --- |
+| `--kub-surface-2` in `startup.css`, one digit | `22b754baa583` → `05107a2eba3a` | **fail** | fail |
+| `--glass-fill` in `startup.css` → opaque red | `22b754baa583` → `24b656f6a129` | **pass** | fail |
+| `--glass-line` in `startup-overlay.css` → opaque green | `fd09076f7dd4` → `ae547025cbc2` | **pass** | fail |
+| `--glass-blur` in `startup-overlay.css` → `blur(0px)` | `fd09076f7dd4` → `3cd09def6f80` | **pass** | fail |
+
+Three of those four are changes a person would see from across the room, and the
+suite reported success on all three.
+
+**Fixed** by adding `glass` to the prefix alternation. One thing had to move with
+it: `--glass-shadow` is three shadows on three lines, so the captured value now
+has its whitespace collapsed before comparison — newlines and the indentation
+after them are not part of a value, and without that the test would fail on
+formatting instead of on drift.
+
+## Measured in the Windows shell, and not a defect
+
+Recorded because an absence of findings is only worth something if it says what
+was actually looked at.
+
+- **`backdrop-filter` is supported, and it really composites.** In WebView2
+  152.0.4191.62 `CSS.supports("backdrop-filter: blur(1px)")` is `true` and
+  `CSS.supports("not (backdrop-filter: blur(1px))")` is `false`, so the opaque
+  fallback in `index.css` does not fire. It is not merely declared either: the
+  pixels under the chat header change when the conversation scrolls beneath it,
+  which a declared-but-inert filter could not do. Note that the **prefixed**
+  property is *not* supported here — `-webkit-backdrop-filter` is `false` — so
+  the `-webkit-` line in `.kub-glass` is inert in this engine and the unprefixed
+  one is what carries the behaviour. Rule 9's trap about a bare property name
+  also matching its vendor prefix therefore cannot be papered over by the prefix
+  doing the work.
+- **Chrome overlays content, and the compensation is exact.** Signed in, at
+  1360x860: the scroller runs the full height of the pane (`top: 44`,
+  `height: 816`) with the header's box at `top: 44, height: 56` over it,
+  `listRunsBehindHeader: true`, and `padding-top: 64px` /
+  `scroll-padding-top: 64px`, `padding-bottom: 94px` /
+  `scroll-padding-bottom: 94px` — padding and scroll-padding equal on both sides,
+  which is the half of rule 2 that breaks silently.
+- **The conversation is visible through that chrome.** Photographed the header
+  strip, 960x56, before and after a real wheel gesture, with every glyph in the
+  document made transparent first: **16.1%** of the strip's pixels changed by
+  more than 2/255. It is a faint effect in the light theme — worst channel delta
+  **4**, mean **1** — but that is `--glass-fill` at `rgba(255, 255, 255, 0.80)`
+  admitting a fifth of the backdrop, a property of the token in any engine and
+  not something WebView2 does differently. The dark theme, at `0.46`, admits more
+  than half.
+- **Scrolling is not broken by the overlaying chrome.** A wheel gesture over the
+  pane moved the list **1320px** upwards (`scrollTop` 4315 → 2995) and it stayed
+  there, `scrollHeight` unchanged at 5131. An earlier measurement that assigned
+  `scrollTop` directly saw no change in the pixels; that was the probe's fault,
+  not the product's, and it is worth recording because the wrong method here
+  manufactures a defect that is not there.
+- **The focus ring reaches everything, the window controls included.** Fourteen
+  Tab steps across the startup screen — version pill, the three window controls,
+  both fingerprint blocks, both devices, the four stage labels — and every one
+  matches `:focus-visible` and computes `2px solid rgb(77, 139, 208)`, which is
+  `--kub-cyan`. The window controls carry `outline-offset: -2px` where the
+  application uses `+2px`, and deliberately: they sit flush against the window
+  edge, where an outset ring would be cut off by it.
+- **Nothing on the startup screen clips.** Measured the width of every element's
+  own text runs — a `Range` over its direct text nodes, so a hint tooltip inside
+  an element is not mistaken for its overflow — against the element's content
+  box, at 1360x860 and at the 960x640 minimum, in all four states the screen can
+  reach: pending, verified, changed, failed. **Zero** offenders at either size,
+  and the document never overflows its window. A cruder detector that read
+  `scrollWidth` reported the override button in the `changed` state as four
+  pixels over; that was its tooltip, and it is noted so the number is not
+  rediscovered as a defect.
+- **The type raise's premise is inverted on this screen, and it leaves slack
+  rather than deficit.** The startup window cannot load Inter — its CSP is
+  `default-src 'self'` and there is no font beside it — so it renders in the
+  Windows stack while the application, and therefore the overlay, gets Inter from
+  the network. Measured on the production page, where both faces are available,
+  Segoe UI is **narrower** than Inter for this screen's Cyrillic, by 5% to 10%:
+
+  | string | size | Inter | Segoe UI | ratio |
+  | --- | --- | --- | --- | --- |
+  | Продолжить — отпечаток не подтверждён | 11.5px | 199.66 | 183.88 | 0.921 |
+  | Открываем рабочее пространство | 19px | 325.50 | 302.62 | 0.930 |
+  | Оболочка LETSCUBE | 12px | 123.23 | 111.29 | **0.903** |
+  | Сертификат узла изменился | 12.5px | 173.76 | 160.24 | 0.922 |
+
+  So a label that fits in the browser cannot fail in this shell for want of room.
+  If anything fails it is the other direction — the overlay is laid out with the
+  startup window's constants and set in the wider face — and that was measured
+  too: **zero** clipped labels in the overlay at 1360x860.
+
+  The scene does therefore change typeface at the handoff, and that is a real
+  discontinuity, but it is one the CSP decides and not one a stylesheet can fix.
+  It is left standing, named here so it is not rediscovered as a mystery.
+- **The 12px floor stops at `artifacts/kub`.** The startup screen still sets
+  10px, 11px and 11.5px in fourteen places. It was outside the 203 that moved, it
+  has its own scale, and nothing on it clips — so this is a scope boundary rather
+  than a defect. Worth knowing that "the one 11px left in the product" in
+  `index.css` is true of the application and not of the shell.
+
+## One failure outside the interface, found on the way and not touched
+
+`pnpm.cmd windows:tauri:qa:storage` passes all four of its phases and then its
+own post-run check reports:
+
+```
+[FAIL] the second move did not carry 8 of 154 non-cache file(s):
+EBWebView/Default/Extension State/LOCK,
+EBWebView/Default/Local Storage/leveldb/LOCK,
+EBWebView/Default/Network/Cookies,
+EBWebView/Default/Session Storage/LOCK,
+EBWebView/Default/shared_proto_db/LOCK
+```
+
+Seven of the eight are lock files and the eighth is the cookie store. The same
+run's measurements line then says the second relocation carried all 154 non-cache
+paths, so the two statements disagree and one of them is wrong. This is the
+profile relocation path rather than the interface, it reproduces on a clean tree
+before any change here, and it belongs to whoever owns
+`scripts/windows-tauri-storage-suite.mjs`. Recorded because it was observed;
+nothing about it was changed.
+
+## Where this evidence is
+
+The probes are in the ignored `output/windows-shell-audit/`: `launch.mjs`, which
+owns a throwaway WebView2 profile and a loopback CDP port the way
+`scripts/windows-tauri-qa.mjs` does; `probe-handoff.mjs`,
+`probe-startup-frame.mjs`, `probe-type-fit.mjs` and
+`probe-glass-over-content.mjs`, each writing its JSON beside it; and
+`mutate.mjs`. The screenshots are under `shots/`.
+
+No production conversation is in any of it. The startup screen and the overlay
+carry no account data at all, and the certificate digests in those pictures are
+invented — the probes generate their own and hand them to `window.renderStartup`,
+because a real fingerprint has no business in a report. The one probe that needed
+the signed-in application makes every glyph in the document transparent and hides
+every raster before it photographs anything, so the strips it compares hold the
+shape of surfaces and nothing readable.

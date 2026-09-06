@@ -67,23 +67,29 @@
    * values do the work and every panel uses the same three, so a panel cannot
    * drift into being a slightly different material from the one beside it.
    *
-   * The fill is --kub-surface-2 at reduced alpha rather than a grey: tinting
+   * The fill is --kub-surface-3 at reduced alpha rather than a grey: tinting
    * with the palette's own surface keeps the hue of the scene when the blur
    * samples the ambient light behind it. The hairline is warm white at very
    * low alpha, which is what reads as a lit edge; a border in the palette's
    * blue reads as a drawn outline instead.
+   *
+   * Copied verbatim from the `.dark` block of artifacts/kub/src/index.css, and
+   * they had drifted from it: a quieter fill on a different surface, a dimmer
+   * lit edge and 18px of blur against the application's 20. This screen hands
+   * over to a page made of the application's material, so a difference here is
+   * a change of substance at the handoff.
    */
-  --glass-fill: rgba(11, 33, 58, .56);        /* --kub-surface-2 at .56 */
-  --glass-fill-strong: rgba(8, 22, 41, .86);  /* --kub-surface at .86 */
-  --glass-line: rgba(255, 255, 255, .09);
-  --glass-blur: blur(18px) saturate(122%);
+  --glass-fill: rgba(17, 43, 71, 0.46);        /* index.css --glass-fill */
+  --glass-fill-strong: rgba(17, 43, 71, 0.96); /* index.css --glass-fill-strong */
+  --glass-line: rgba(255, 255, 255, 0.10);     /* index.css --glass-line */
+  --glass-blur: blur(20px) saturate(122%);     /* index.css --glass-blur */
   /* Two shadows, not one: a wide ambient pool that separates the panel from
      the scene, and a tight contact shadow that keeps it from floating. The
      inset highlight on the top edge is the third of the three and the one that
      actually makes it look like a sheet of something. */
   --glass-shadow:
-    0 20px 44px -26px rgb(0 0 0 / .9),
-    0 3px 10px -6px rgb(0 0 0 / .55),
+    0 20px 44px -26px rgba(0, 0, 0, 0.9),
+    0 3px 10px -6px rgba(0, 0, 0, 0.55),
     inset 0 1px 0 var(--glass-line);
 
   /* Local to this screen: the accent that states the current verification
