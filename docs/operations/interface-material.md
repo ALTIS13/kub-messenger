@@ -2,7 +2,7 @@
 
 What LETSCUBE's surfaces are made of, and the rules that keep them one material
 rather than a set of similar-looking fills. Written after the stage that
-introduced it, because six of the rules below were learned by breaking
+introduced it, because seven of the rules below were learned by breaking
 something first, and every one of them is cheaper to read than to rediscover.
 
 The source of truth is `artifacts/kub/src/index.css`. This file explains it; it
@@ -39,7 +39,7 @@ is not necessarily legible as a sentence. Fills, borders and icon shapes keep
 `--kub-danger` and `--kub-cyan`: those answer a 3:1 requirement they already
 meet.
 
-## The eleven rules
+## The twelve rules
 
 ### 1. Never write the material by hand
 
@@ -73,11 +73,13 @@ Three things that change costs when chrome overlays content:
   `scrollIntoView` carries a target to the edge of the scrollport, which is now
   covered: the browser reports success and the message sits under the header.
   Padding and scroll-padding move together, on both sides.
-- **Do not reach for `z-index` to fix the paint order.** Positioned siblings
-  with `z-index: auto` paint in tree order, so the list covered the header —
-  but a `z-index` on the header makes it a stacking context and traps the fixed
-  dialogs inside it, which is rule 3 arriving by another road. `order: -1`
-  moves where a flex item paints and creates no stacking context.
+- **Do not reach for `z-index` to fix the paint order, and do not reach for
+  `order` either.** Positioned siblings with `z-index: auto` paint in tree
+  order, so the list covered the header — but a `z-index` on the header makes
+  it a stacking context and traps the fixed dialogs inside it, which is rule 3
+  arriving by another road. `order: -1` on the list was the first answer and it
+  was wrong: see rule 12. What works is tree order — render the list first and
+  the chrome after it.
 - **A `ResizeObserver` watches the content box by default**, so a composer that
   grows by its own padding — which is how the mobile keyboard inset is
   applied — does not register. Measured: the dock grew to 390px, the padding
@@ -301,6 +303,48 @@ a width and leaving the colour gives a declaration that draws nothing and looks
 deliberate. Adding a resting veil to something that already veils on hover
 deletes the hover. `tests/unit/edge-vocabulary.test.mjs` holds both, along with
 the named exceptions.
+
+### 12. `order` does not move paint order in WebKit
+
+The chrome overlays the conversation, and which of the two paints on top is the
+whole effect. Both are positioned boxes with `z-index: auto`, so the answer is
+tree order — and the header came first in the markup. `order: -1` on the list
+was what moved it underneath.
+
+`order` re-orders painting for flex items in Chromium. **WebKit does not apply
+it to positioned boxes at all.** Reduced to two divs in a flex column, with the
+chrome absolutely positioned first and the list `position: relative; order: -1`
+second, Chromium paints the chrome on top and WebKit paints the list on top;
+with the list `position: static` both agree. The layout is identical in every
+case — same box, same offsets — and only the painting differs, which is why
+nothing about the geometry gave it away.
+
+What it cost: for the whole of this stage the chat header did not exist on any
+iPhone. Measured on WebKit 26.4 at 390x844, the header's own box was at top 0
+with height 56 and byte-identical geometry to Chromium, no ancestor carried a
+backdrop-filter, and the topmost element at the centre of the header was a
+message bubble. The back button's own centre hit-tested to a bubble, and the
+header's menu could not be opened at any width, 1440 included. On a phone that
+header is the only way out of a conversation.
+
+Three things follow.
+
+- **Tree order is the mechanism.** The list is rendered first and the chrome
+  after it. It costs reading order — the conversation is read before its
+  header — and that is the cheapest price on offer.
+- **The alternatives were measured, not assumed.** A `z-index` on the chrome,
+  or an `isolation` on the column, makes a stacking context and clamps every
+  `fixed` overlay in the subtree: this header's menu and modals, the composer's
+  camera and video recorder, a bubble's context menu. Whichever of the two
+  chrome boxes then lost would have its full-screen dialog covered by the
+  other, and on a phone the header's menu opens exactly where the composer is.
+  A negative `z-index` on the list is worse still: measured, the list stops
+  being the hit-test target in both engines.
+- **The matrix had six Chromium viewports and no WebKit.** That is the reason a
+  defect this size survived six deploys. `webkit-mobile-390` is now in
+  `playwright.config.ts`; with the pre-fix source restored exactly, all seven
+  Chromium checks pass and WebKit fails two, which is the proof that the engine
+  is the variable and no width of Chromium substitutes for it.
 
 ## Where the material is not used, on purpose
 
