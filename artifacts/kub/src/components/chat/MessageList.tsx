@@ -97,11 +97,44 @@ function shouldShowDateSeparator(prev: MessageWithSender | null, current: Messag
   return getMessageDayKey(prev.created_at) !== getMessageDayKey(current.created_at);
 }
 
+/**
+ * The four chips that ride inside the scrolling conversation carry no fill.
+ *
+ * This one, the history band, the date separator and the unread separator all
+ * used to write their own material: `backdrop-blur-sm` over a hand-mixed
+ * `--kub-bg` at 75-82% alpha. That is rule 1 (never write the material by hand)
+ * and rule 6 (nothing that scrolls or repeats) of
+ * `docs/operations/interface-material.md` at once, and the blur bought nothing:
+ * these chips are block rows in the flow, so what is behind them is the chat
+ * wallpaper and never a message — rule 6's own argument, exactly. D-062.
+ *
+ * `.kub-raise` was the obvious replacement and it is wrong here. The veil is
+ * the right idea — one step above whatever it is laid on, rule 5 — but on a
+ * light ground it steps DOWN, and `--kub-muted` is not far enough from the page
+ * to pay for that. Photographed on the device with the text made transparent,
+ * the way rule 7 requires, worst of three points across the date separator's
+ * text box:
+ *
+ *   fill              light backdrop        light   dark backdrop      dark
+ *   as shipped, 75%   rgb(233, 239, 246)    5.00    rgb(6, 11, 25)     8.05
+ *   .kub-raise        rgb(219, 226, 235)    4.30    rgb(24, 29, 42)    6.68
+ *   none              rgb(233, 239, 246)    4.86    rgb(6, 12, 26)     7.86
+ *
+ * The veil is under the 4.5 floor in the light theme. That is rule 10's warning
+ * arriving in a new place — a fill that finally renders can still be the wrong
+ * one — and its answer is the same: drop the fill, keep the border, which costs
+ * nothing and carries the chip on its own. The 0.14 between 5.00 and 4.86 is
+ * the wallpaper's dot grid showing through where the old fill dimmed it.
+ *
+ * So what separates these from the wallpaper is `--kub-border-color`, and for
+ * the unread separator its pink form. That is what carried them before as
+ * well: 75-82% of the ground over the ground is the ground.
+ */
 function SystemMessageNotice({ message }: { message: MessageWithSender }) {
   const text = message.content?.trim() || "Системное уведомление";
   return (
     <div className="my-2 flex w-full justify-center px-8" data-system-message={message.id}>
-      <span className="max-w-[min(82vw,32rem)] rounded-full border border-[color:var(--kub-border-color)] bg-[color-mix(in_srgb,var(--kub-bg)_76%,transparent)] px-3 py-1 text-center text-[12px] leading-snug text-[color:var(--kub-muted)] shadow-sm backdrop-blur-sm">
+      <span className="max-w-[min(82vw,32rem)] rounded-full border border-[color:var(--kub-border-color)] px-3 py-1 text-center text-[12px] leading-snug text-[color:var(--kub-muted)]">
         {text}
       </span>
     </div>
@@ -849,7 +882,7 @@ export function MessageList({
         <div ref={contentRef} className="[overflow-anchor:none]">
           {(loadingOlder || olderError) && (
             <div className="flex justify-center py-2" data-message-history-status>
-              <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--kub-border-color)] bg-[color-mix(in_srgb,var(--kub-bg)_78%,transparent)] px-3 py-1 text-xs text-[color:var(--kub-muted)] backdrop-blur-sm">
+              <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--kub-border-color)] px-3 py-1 text-xs text-[color:var(--kub-muted)]">
                 {loadingOlder && <KubIcon name="spinner" size={12} />}
                 {olderError ?? "Загружаем историю..."}
               </span>
@@ -914,14 +947,19 @@ export function MessageList({
             >
               {showDate && (
                 <div className="flex justify-center my-3" data-message-date-separator={getMessageDayKey(msg.created_at)}>
-                  <span className="px-3 py-1 rounded-full text-xs select-none backdrop-blur-sm bg-[color-mix(in_srgb,var(--kub-bg)_75%,transparent)] text-[color:var(--kub-muted)] border border-[color:var(--kub-border-color)]">
+                  <span className="px-3 py-1 rounded-full text-xs select-none text-[color:var(--kub-muted)] border border-[color:var(--kub-border-color)]">
                     {getMessageDayLabel(msg.created_at)}
                   </span>
                 </div>
               )}
               {msg.id === firstUnreadMessageId && (
                 <div className="unread-separator my-3 flex items-center justify-center" data-testid="first-unread-separator">
-                  <span className="rounded-full border border-[color-mix(in_srgb,var(--kub-pink)_35%,var(--kub-border-color))] bg-[color-mix(in_srgb,var(--kub-bg)_82%,var(--kub-pink)_8%)] px-3 py-1 text-[12px] font-semibold uppercase tracking-wide text-[color:var(--kub-pink)] backdrop-blur-sm">
+                  {/* The pink tint went with the blur, and the border keeps the
+                      signal. A tinted fill under coloured words is the shape of
+                      the ops-report callout in rule 10: a backdrop moved toward
+                      the text's own colour costs contrast and says nothing the
+                      border does not already say. */}
+                  <span className="rounded-full border border-[color-mix(in_srgb,var(--kub-pink)_35%,var(--kub-border-color))] px-3 py-1 text-[12px] font-semibold uppercase tracking-wide text-[color:var(--kub-pink)]">
                     Новые сообщения
                   </span>
                 </div>

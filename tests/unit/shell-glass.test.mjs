@@ -499,3 +499,70 @@ for (const file of ["components/sidebar/ChatListItem.tsx", "components/chat/Mess
     );
   });
 }
+
+/**
+ * D-062. Rule 6 is about the *contents* of a scroller, not only its rows.
+ *
+ * Four chips ride inside the message list's scrolled content — the system
+ * notice, the history band, the date separator and the unread separator — and
+ * each wrote `backdrop-blur-sm` over a hand-mixed `--kub-bg` at 75-82% alpha.
+ * That is rule 1 and rule 6 at once, and the blur bought nothing: all four are
+ * block rows in the flow, so what is behind them is the chat wallpaper and
+ * never a message. Rule 6's own argument, arriving at its own doorstep.
+ *
+ * Measured on the device with `dumpsys gfxinfo` over eight identical flings of
+ * one conversation, median of three runs each side: 5.25% janky before and
+ * 2.43% after, 99th percentile 36ms and 27ms, slow issue-draw commands 37 and
+ * 17. Small, real, and a contract violation either way.
+ *
+ * They carry no fill either, and that is the second half of the entry.
+ * `.kub-raise` was tried first and photographed under the floor: in the light
+ * theme the veil steps DOWN, which took the date separator's `--kub-muted` text
+ * to **4.30:1**, against 4.86:1 on the bare ground and 5.00:1 on the fill it
+ * replaced. Rule 10's lesson in a new place — the fill was dropped and the
+ * border, which costs nothing and carries the same signal, was kept.
+ *
+ * Each landmark is on the wrapping element and the class string that follows it
+ * is the chip's own, which is what makes this findable without pinning line
+ * numbers.
+ */
+const IN_LIST_CHIPS = [
+  ["the system notice", "data-system-message"],
+  ["the history band", "data-message-history-status"],
+  ["the date separator", "data-message-date-separator"],
+  ["the unread separator", 'data-testid="first-unread-separator"'],
+];
+
+for (const [what, landmark] of IN_LIST_CHIPS) {
+  test(`${what} rides inside the conversation without frosting it`, () => {
+    const source = withoutComments(read("components/chat/MessageList.tsx"));
+    const at = source.indexOf(landmark);
+    assert.ok(at >= 0, `${landmark} is gone, so this chip can no longer be found`);
+    const after = source.slice(at);
+    const classes = after.match(/className="([^"]+)"/)?.[1];
+    assert.ok(classes, `no class string follows ${landmark}`);
+
+    assert.doesNotMatch(
+      classes,
+      /\bbackdrop-blur(-|\b)/,
+      `${what} frosts itself inside the scrolled conversation, which is rules 1 and 6 at once`,
+    );
+    assert.doesNotMatch(
+      classes,
+      /\bbg-\[color-mix\(/,
+      `${what} mixes its own translucent fill; the fill existed to give the blur something to do`,
+    );
+    assert.doesNotMatch(
+      classes,
+      /(^|\s)kub-raise(\s|$)/,
+      `${what} takes the veil, which on a light ground steps down and put this text at 4.30:1`,
+    );
+    // What separates it from the wallpaper instead. The unread separator's
+    // border is the same token mixed with the pink it signals in.
+    assert.match(
+      classes,
+      /\bborder-\[color/,
+      `${what} has neither a fill nor a border, so nothing separates it from the conversation`,
+    );
+  });
+}
