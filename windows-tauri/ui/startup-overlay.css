@@ -206,12 +206,12 @@
   background: color-mix(in srgb, var(--channel-accent) 28%, transparent);
   transition: background var(--kub-motion-standard) var(--kub-ease-standard);
 }
-.startup-overlay-rail:first-child {
+.startup-overlay-rail-left {
   left: calc(25% - var(--column-shift) + var(--device-half) + var(--node-offset));
   right: calc(50% + var(--conduit-core) / 2);
   border-radius: 999px 0 0 999px; border-right: 0;
 }
-.startup-overlay-rail:last-child {
+.startup-overlay-rail-right {
   left: calc(50% + var(--conduit-core) / 2);
   right: calc(25% - var(--column-shift) + var(--node-half) + var(--node-offset));
   border-radius: 0 999px 999px 0; border-left: 0;
