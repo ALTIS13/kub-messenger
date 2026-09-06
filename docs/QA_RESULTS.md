@@ -1,5 +1,78 @@
 # QA Results
 
+## 2026-09-06 - Windows 0.2.14 Stable release, and the defect QA caught before it shipped
+
+Cut `0.2.14` / `desktopBuild` 18 for the reworked connection channel: `a3c5993`
+made the link between the machine and the node a 4px line instead of a 20px
+filled tube, and `160e486` gave its traffic a direction — one comet spanning the
+whole span, replacing a symmetric highlight drawn once per half. Both are
+compiled into the shell, so a build is the only thing that ships them.
+
+Published from `/srv/letscube/releases/incoming/windows-0.2.14-18`:
+
+```
+Published signed Windows updater test 0.2.14 (2367306 bytes, sha256 51cafe43c6cef824f74bb33c1f3e97113ad46f347b859115e833dda4ec1f4a92)
+Published signed Windows updater stable 0.2.14 (2367306 bytes, sha256 51cafe43c6cef824f74bb33c1f3e97113ad46f347b859115e833dda4ec1f4a92)
+Published windows stable 0.2.14 build 18 (2367306 bytes, sha256 51cafe43c6cef824f74bb33c1f3e97113ad46f347b859115e833dda4ec1f4a92)
+```
+
+`node scripts/verify-public-release-artifact.mjs windows`, exit code 0:
+
+```
+windows 0.2.14: verified 2367306 bytes, sha256 51cafe43c6cef824f74bb33c1f3e97113ad46f347b859115e833dda4ec1f4a92
+```
+
+Four independent readings agree: the publisher's own report, the verifier
+streaming the download catalog, a plain `curl` of each of the two public URLs
+hashed separately, and a full `cmp` of both downloads against the locally built
+installer. The download copy and the updater copy are byte-identical to each
+other and to the artifact signed here.
+
+The updater path was replayed the way an installed client walks it, using the
+`pubkey` read out of `tauri.conf.json` **as it stood at `a23af1c`, the 0.2.13
+cut** — the key a 0.2.13 installation holds. Stable returns `0.2.14`, the SemVer
+gate offers it, `mandatory` is false with no `minimumSupportedVersion`, the
+artifact hashes to the manifest SHA-256, and the signature carried *in the
+manifest* verifies against that 0.2.13 key over the downloaded bytes. Server-side
+`minisign -Vm` reported `Signature and comment signature verified` before
+publication. The key is unchanged since 0.2.11.
+
+**QA stopped the first attempt, and it was right to.** `baseline` failed on
+`railsMeetPorts` in the production overlay. Cause: both scenes gained the comet
+as a new last child of the rail wrapper, but `startup.css` names its halves
+(`.rail-left` / `.rail-right`) while `startup-overlay.css` selected them by
+position (`:first-child` / `:last-child`). The new element took `:last-child`, so
+the right rail matched no positioning rule at all, kept only `position: absolute`
+from the base rule, and collapsed to zero width — the right half of the channel,
+junction to node, stopped being drawn on the production page. The startup window
+was immune, which is exactly why its geometry passed while the overlay's failed.
+
+Fixed in `cc6d4e6` by naming the overlay's halves, removing the divergence rather
+than patching the selector. Measured in a real shadow root either way: rail
+widths `[152, 0]` with the positional selectors, `[152, 160]` with named classes,
+client port right edge and left rail left edge both at 485, node port left edge
+and right rail right edge both at 804, and 8px between the halves where the
+junction sits. `tests/unit/tauri-shell.test.mjs` now forbids `:first-child`,
+`:last-child` and `:nth-child` on a rail in **both** stylesheets.
+
+The rebuild after that fix matters: `cc6d4e6` changes `startup-overlay.css` and
+`.html`, which compile into the binary, so the artifact built before it
+(`6485825a…`) was stale and was deleted rather than published. Only `51cafe43…`,
+built from the fixed tree, was ever staged or published.
+
+Two things worth recording rather than rediscovering:
+
+- A rule keyed to sibling position breaks when someone adds a sibling, and
+  nothing about adding one announces that it should be read. The two scenes must
+  stay written the same way; they had already drifted twice this stage by having
+  the startup window edited alone.
+- Re-running the full suite after a fix is not optional. The first attempt failed
+  on the very first test of `baseline`, so seven of the eight tests never
+  executed and said nothing about the build at all.
+
+Authenticode is still not applied. That remains an open packaging item, not a
+regression: SmartScreen treats 0.2.14 exactly as it treated 0.2.13.
+
 ## 2026-09-06 - Windows 0.2.13 Stable release, and the QA gate it had to fix first
 
 Cut `0.2.13` / `desktopBuild` 17 for one change: the flat stage track on the
