@@ -15,12 +15,23 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 // on 2026-09-06 — the matrix stopped at 390 and the first Android walk found
 // three defects below it, so a public surface that makes availability claims is
 // the last place that should go on being unchecked at the narrowest width.
+//
+// `webkit-mobile-390` was added later the same day, and for a sharper reason.
+// The engine had never been in the matrix at all, and the first spec run on it
+// found the chat header unpaintable in Safari. This list then quietly cancelled
+// half of that: naming five chromium projects meant every one of this file's
+// fifteen tests skipped on the new project, so the one public surface an iPhone
+// owner reaches — in Safari, before installing anything, while it tells them
+// which platforms are available — remained the surface with no Safari coverage.
+// A gate that enumerates engines has to be revisited whenever an engine is
+// added, and nothing about adding one says so.
 const COVERED_PROJECTS = [
   "chromium-desktop-1920",
   "chromium-desktop-1440",
   "chromium-mobile-412",
   "chromium-mobile-390",
   "chromium-mobile-360",
+  "webkit-mobile-390",
 ];
 
 const SCROLL_ROOT = '[data-testid="public-scroll-root"]';
@@ -280,7 +291,27 @@ test.describe("public home presentation", () => {
     await expect(page).toHaveURL(/\/$/);
   });
 
-  test("the primary actions are reachable and visible from the keyboard", async ({ page }) => {
+  test("the primary actions are reachable and visible from the keyboard", async ({ page }, testInfo) => {
+    // Not run on WebKit, and the reason is a platform default rather than
+    // anything this page does. Safari moves Tab focus between form controls
+    // only; links are skipped unless the person has turned on Full Keyboard
+    // Access. Measured on both engines from the same page, eight presses each:
+    //
+    //   WebKit    BUTTON "Ещё 1" → BODY → BUTTON → BODY → …  (never an <a>)
+    //   Chromium  A "Загрузка" → A "Конфиденциальность" → A "Войти"
+    //             → A "Открыть веб-версию" → A "Все платформы"
+    //
+    // So focus is not trapped here — it moves, and it steps over the links.
+    // The primary actions are links because they navigate, which is the right
+    // element for them; making them buttons to satisfy a Tab order would be
+    // changing the page's semantics to suit a test.
+    //
+    // What this contract still guarantees everywhere it runs: the actions are
+    // reachable in order and each one is visible when it takes focus.
+    test.skip(
+      testInfo.project.name.startsWith("webkit"),
+      "Safari skips links when tabbing unless Full Keyboard Access is on; measured, not assumed",
+    );
     await page.goto("/");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     // The catalog resolves after paint and re-renders the hero actions. Tabbing
