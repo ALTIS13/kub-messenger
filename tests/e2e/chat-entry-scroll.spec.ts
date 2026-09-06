@@ -232,6 +232,122 @@ test.describe("chat entry scroll", () => {
     expect(worst, `a frame was painted ${worst}px from the bottom after the reflow`).toBeLessThanOrEqual(40);
   });
 
+  /**
+   * D-058, and the mechanism rather than the symptom.
+   *
+   * On Android the WebView SHRINKS when the keyboard opens — it is not laid over
+   * the page. So the height of this scrollport is the only box that moves:
+   * measured on the device, `window.innerHeight` and `visualViewport.height`
+   * both went 748 to 482 together, the computed keyboard inset stayed honestly
+   * at 0, the composer stayed at 70px and the content's `scrollHeight` stayed at
+   * 4467. `scrollTop` was left at 3719 while the maximum rose to 3985, so the
+   * newest three messages went behind the composer and the newest bubble sat
+   * 242.1px under its top edge.
+   *
+   * Shrinking the viewport height with the width held fixed is that mechanism
+   * exactly: nothing rewraps, the content keeps its height, and only the
+   * scrollport loses some. The width is held from the project's own viewport so
+   * this runs honestly at every width in the matrix, 360 included.
+   */
+  test("the newest messages survive the viewport losing the keyboard's height", async ({ page }) => {
+    await openCapture(page);
+    // Past the entry lock, and that is not padding.
+    //
+    // Chat entry arms a 4200ms bottom lock with settle timers behind it, and
+    // while it is armed those timers re-pin the list for their own reasons. A
+    // shrink measured inside that window looked corrected — sampled every frame,
+    // the list really did sit 266px out and a settle timer pulled it back 432ms
+    // later — so the window is exactly long enough to hide the defect from a
+    // test while a reader who has been in the chat for five seconds still meets
+    // it. Waiting the lock out is what makes this measure the mechanism.
+    await page.waitForTimeout(5_200);
+
+    const size = page.viewportSize();
+    expect(size, "the project has no viewport to shrink").not.toBeNull();
+
+    const before = await page.evaluate(() => {
+      const element = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
+      if (!element) return null;
+      return {
+        distance: element.scrollHeight - element.scrollTop - element.clientHeight,
+        client: element.clientHeight,
+        content: element.scrollHeight,
+      };
+    });
+    expect(before, "the conversation did not mount").not.toBeNull();
+    expect(before!.distance, "the fixture did not start at the bottom").toBeLessThanOrEqual(4);
+
+    // 266px is the keyboard measured on the device. Nothing depends on the
+    // exact number; what matters is that only the height changes.
+    await page.setViewportSize({ width: size!.width, height: Math.max(240, size!.height - 266) });
+    await page.waitForTimeout(900);
+
+    const after = await page.evaluate(() => {
+      const element = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
+      if (!element) return null;
+      return {
+        distance: element.scrollHeight - element.scrollTop - element.clientHeight,
+        client: element.clientHeight,
+        content: element.scrollHeight,
+      };
+    });
+
+    expect(after!.client, "the scrollport did not shrink, so this proves nothing").toBeLessThan(before!.client);
+    expect(
+      after!.content,
+      "the content changed height too, so a shrunken scrollport is not what was tested",
+    ).toBe(before!.content);
+    expect(
+      after!.distance,
+      `the reader was left ${after!.distance}px from the bottom after the viewport shrank`,
+    ).toBeLessThanOrEqual(4);
+  });
+
+  test("a reader up in the history is not dragged down when the viewport shrinks", async ({ page }) => {
+    // The other half of the same contract, and the reason the fix is guarded by
+    // `isAtBottomRef` rather than by anything new. A reader who scrolled up did
+    // not ask to move, and the keyboard opening is not a request to.
+    await openCapture(page);
+    // Past the entry lock for a second reason here: while it is armed
+    // `handleScroll` asserts "at bottom" without measuring, so a reader parked
+    // in the history inside that window is not one the component believes in.
+    await page.waitForTimeout(5_200);
+
+    const size = page.viewportSize();
+    expect(size).not.toBeNull();
+
+    const parked = await page.evaluate(() => {
+      const element = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
+      if (!element) return null;
+      // A wheel event is what tells the component a person is reading, and it is
+      // the same signal the release handler listens for.
+      element.dispatchEvent(new WheelEvent("wheel", { deltaY: -400, bubbles: true }));
+      element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 900);
+      element.dispatchEvent(new Event("scroll", { bubbles: true }));
+      return element.scrollTop;
+    });
+    expect(parked, "the fixture is too short to scroll away from the bottom").toBeGreaterThan(100);
+    await page.waitForTimeout(500);
+
+    const top = await page.evaluate(() => {
+      const element = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
+      return element ? element.scrollTop : null;
+    });
+
+    await page.setViewportSize({ width: size!.width, height: Math.max(240, size!.height - 266) });
+    await page.waitForTimeout(900);
+
+    const after = await page.evaluate(() => {
+      const element = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
+      return element ? element.scrollTop : null;
+    });
+
+    expect(
+      Math.abs((after ?? 0) - (top ?? 0)),
+      `the reader was moved ${Math.abs((after ?? 0) - (top ?? 0))}px by a viewport change they did not ask for`,
+    ).toBeLessThanOrEqual(4);
+  });
+
   test("the entry lands at the bottom and stays there", async ({ page }) => {
     // The settled contract, kept separate on purpose. The frame-level test above
     // says the correction is not seen; this one says it still happens, so a

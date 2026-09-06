@@ -640,7 +640,8 @@ export function MessageList({
 
   useEffect(() => {
     const content = contentRef.current;
-    if (!content || typeof ResizeObserver === "undefined") return undefined;
+    const scrollport = containerRef.current;
+    if ((!content && !scrollport) || typeof ResizeObserver === "undefined") return undefined;
     const observer = new ResizeObserver(() => {
       const shouldKeepBottom = isAtBottomRef.current || isInitialBottomLocked();
       if (!shouldKeepBottom || preservingOlderScrollRef.current || loadingOlderRef.current) return;
@@ -654,7 +655,36 @@ export function MessageList({
       // retrigger the observer that is running.
       applyBottomNow();
     });
-    observer.observe(content);
+    if (content) observer.observe(content);
+    // The scrollport as well as the content, and border-box on purpose.
+    //
+    // D-058: on Android the WebView SHRINKS when the keyboard opens, it does not
+    // get covered. So `innerHeight - visualViewport.height` is honestly 0, the
+    // composer does not move, `layoutVersion` does not change, and the content's
+    // height does not change either — measured, `scrollHeight` stayed at 4467
+    // through the whole cycle. The one box that moved was this one: 748 to 482.
+    // Nothing observed it, so `scrollTop` was left at 3719 while the maximum
+    // rose to 3985 and the newest three messages went behind the composer, 242px
+    // under its top edge. And no affordance was offered, because `scrollTop`
+    // never changed, so no `scroll` event fired and `isAtBottomRef` still said
+    // the reader was at the bottom.
+    //
+    // The whole defect is an asymmetry: GROWING the viewport forces the browser
+    // to clamp `scrollTop` down to the new maximum, which is why dismissing the
+    // keyboard always looked correct. Shrinking leaves a still-valid `scrollTop`
+    // alone, and nothing else was watching.
+    //
+    // The guard above is the one that matters and it is deliberately the
+    // existing one: a reader who was at the bottom is put back at the bottom, a
+    // reader who was up in the history is left exactly where they are, because
+    // they did not ask to move and the keyboard is not their request to.
+    //
+    // `border-box`, so this observes the scrollport's own height and not its
+    // padding. The padding carries `bottomInset`, which is the composer's
+    // measured height, and that already has a layout effect keyed on it — a
+    // content-box observation would fire a second time for every composer
+    // resize and add nothing.
+    if (scrollport) observer.observe(scrollport, { box: "border-box" });
     return () => observer.disconnect();
   }, [applyBottomNow, isInitialBottomLocked]);
 

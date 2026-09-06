@@ -143,3 +143,50 @@ test("the resize correction stays out of the older-history hold", () => {
     "the observer restores the older-history anchor again; measured, that undoes the hold's correction a frame later and paints 1252px out",
   );
 });
+
+/**
+ * D-058: the scrollport is observed, not only the content.
+ *
+ * On Android the WebView SHRINKS when the keyboard opens rather than covering
+ * the page, so every signal the component already had stayed honestly still.
+ * Measured on the device across a clean open/close cycle: `innerHeight` and
+ * `visualViewport.height` both 748 -> 482, computed keyboard inset 0 the whole
+ * time, `--kub-composer-height` 70px throughout, content `scrollHeight` 4467
+ * throughout. Only this one box moved, and nothing watched it: `scrollTop`
+ * stayed at 3719 while the maximum rose to 3985, so the reader lost the newest
+ * 266px of the conversation and the newest bubble sat 242.1px behind the
+ * composer. No `scroll` event fired, so `isAtBottomRef` still said "at the
+ * bottom" and the scroll-to-bottom button was never offered.
+ *
+ * The behavioural proof is in `tests/e2e/chat-entry-scroll.spec.ts`, which
+ * shrinks the viewport height with the width held and reads 266px back the
+ * moment this observation is removed. This is the source-level half, and it is
+ * weaker than it looks: it says the box is watched, not that watching it works.
+ */
+test("the scrollport is observed as well as the content", () => {
+  const effect = messageList.slice(
+    messageList.indexOf("const scrollport = containerRef.current;"),
+    messageList.indexOf("}, [applyBottomNow, isInitialBottomLocked]);"),
+  );
+  assert.ok(effect.length > 0, "the observer effect no longer reads the scroll container");
+  assert.match(
+    effect,
+    /observer\.observe\(scrollport, \{ box: "border-box" \}\)/,
+    "the scrollport is unobserved again, so a keyboard that shrinks the WebView takes the newest messages with it",
+  );
+  // Border-box, not content-box. The padding carries `bottomInset`, which the
+  // layout effect keyed on it already handles; a content-box observation would
+  // fire a second time for every composer resize and add nothing.
+  assert.doesNotMatch(
+    effect,
+    /observer\.observe\(scrollport\)\s*;/,
+    "the scrollport is observed on its content box, which also fires for every composer resize",
+  );
+  // The guard is the existing one on purpose: a reader who was at the bottom is
+  // put back there, a reader up in the history is left alone.
+  assert.match(
+    effect,
+    /const shouldKeepBottom = isAtBottomRef\.current \|\| isInitialBottomLocked\(\);/,
+    "the correction no longer asks whether the reader was at the bottom",
+  );
+});
