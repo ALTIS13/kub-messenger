@@ -53,7 +53,15 @@ export function BottomNav() {
     <nav
       aria-label="Навигация"
       className="kub-glass relative md:hidden flex items-center justify-around flex-shrink-0 px-2 pb-safe border-t border-[color:var(--kub-border-color)]"
-      style={{ height: "56px" }}
+      // The row is 56px and the home indicator is extra, not a share of it.
+      // Tailwind boxes are `border-box`, so with a flat `height: 56px` the
+      // safe-area padding this bar asks for would have been taken out of the
+      // tabs rather than added below them — six labels and their icons into
+      // 22px on an iPhone. The height carries the inset so the padding has
+      // somewhere to go; both read `env()` with a `0px` fallback, so on a
+      // phone without an inset, on Android and in the desktop shell this is
+      // the same 56px bar it was.
+      style={{ height: "calc(56px + env(safe-area-inset-bottom, 0px))" }}
     >
       {tabs.map(({ id, label, icon }) => {
         const isActive =

@@ -1731,3 +1731,18 @@ textarea::placeholder, input::placeholder {
     }
   }
 }
+
+/* The bottom safe area, as a utility, because it was already being written as
+   one. `pb-safe` appeared on three surfaces that dock to the bottom edge of a
+   phone — the tab bar, a full-screen modal and the chat-list sheet — and no
+   such utility exists in Tailwind. It compiled to nothing: `pb-safe` occurs
+   zero times in the 219 kB production stylesheet, so all three sat on the home
+   indicator.
+
+   `@utility`, not `@layer utilities`, so Tailwind sorts it with the rest and a
+   `pb-*` written beside it still wins. The fallback keeps every other platform
+   where it was: `env()` resolves to `0px` off an inset-aware device, and the
+   second argument covers the browsers that do not know the variable at all. */
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
