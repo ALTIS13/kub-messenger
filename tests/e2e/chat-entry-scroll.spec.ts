@@ -26,6 +26,33 @@ const CAPTURE_PATH = "/__qa/public-preview";
 const WINDOW_KEY = "__letscubePublicPreviewFixture";
 const READY = "data-public-preview-ready";
 const SAMPLES_KEY = "__letscubeEntryScrollSamples";
+/**
+ * When the page itself was told its viewport had changed.
+ *
+ * `page.setViewportSize` reaches the renderer as a device-metrics override, and
+ * Chromium applies that override to layout BEFORE the document runs its resize
+ * steps. Traced at 1920 with a timestamp on every reading:
+ *
+ *   3489 raf top=3469 h=4505 c=1036 inner=1080x1920
+ *   3524 raf top=3469 h=4505 c=856  inner=900x900   <- layout already resized
+ *   3536 raf top=3469 h=4505 c=856  inner=900x900   <- and again
+ *   3543 resize inner=900x900                       <- the page is told here
+ *   3548 ro-fire n=2
+ *   3548 ro  top=3649 h=4505 c=856  inner=900x900   <- corrected, same frame
+ *
+ * Two frames were laid out at the new size while no resize event and no
+ * ResizeObserver notification had been delivered to the page. Nothing the
+ * application could do would place the list in those two frames: it has not
+ * been told, by any API, that anything moved. A real window resize does not
+ * split this way — the size change, the resize steps and the observer
+ * broadcast all belong to the same rendering lifecycle.
+ *
+ * So the resize test counts frames from this timestamp on, and everything the
+ * page could act on is still counted: the resize event and the observer
+ * broadcast land in the same frame, 5ms apart above, so the very frame in which
+ * the correction is due is inside the window.
+ */
+const RESIZES_KEY = "__letscubeViewportResizes";
 
 /**
  * Enough messages that the history is several viewports tall.
@@ -79,9 +106,15 @@ type Sample = { t: number; rows: number; top: number; height: number; client: nu
  * lasts. The observer is attached a task after the list first has rows, so the
  * component's own observer is registered first and is delivered first.
  */
-function installSampler(samplesKey: string) {
+function installSampler([samplesKey, resizesKey]: [string, string]) {
   const samples: Sample[] = [];
   (window as unknown as Record<string, unknown>)[samplesKey] = samples;
+
+  // Registered before the application boots, so the first resize the page is
+  // ever told about is recorded whatever else does or does not listen for it.
+  const resizes: number[] = [];
+  (window as unknown as Record<string, unknown>)[resizesKey] = resizes;
+  window.addEventListener("resize", () => resizes.push(Math.round(performance.now())));
 
   const read = (): Sample | null => {
     const element = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
@@ -143,7 +176,7 @@ async function openCapture(page: Page) {
     },
     [WINDOW_KEY, FIXTURE] as const,
   );
-  await page.addInitScript(installSampler, SAMPLES_KEY);
+  await page.addInitScript(installSampler, [SAMPLES_KEY, RESIZES_KEY] as [string, string]);
 
   const response = await page.goto(CAPTURE_PATH, { waitUntil: "domcontentloaded" }).catch(() => null);
   const ready = response
@@ -175,15 +208,29 @@ async function openCapture(page: Page) {
  * A frame with no rows yet is not a frame of the conversation, and a history
  * that does not overflow cannot be away from the bottom, so both are dropped —
  * their presence would only dilute the measurement.
+ *
+ * `since` drops frames painted before a moment the caller names; see
+ * `RESIZES_KEY`. It defaults to counting everything.
  */
-async function distancesFromBottom(page: Page): Promise<number[]> {
+async function distancesFromBottom(page: Page, since = 0): Promise<number[]> {
   const samples = await page.evaluate(
     (key) => (window as unknown as Record<string, Sample[]>)[key] ?? [],
     SAMPLES_KEY,
   );
   return samples
-    .filter((sample) => sample.rows > 0 && sample.height > sample.client)
+    .filter((sample) => sample.t >= since && sample.rows > 0 && sample.height > sample.client)
     .map((sample) => sample.height - sample.top - sample.client);
+}
+
+/** The scrollport as it stands right now, for the before/after of a resize. */
+async function conversationMetrics(page: Page): Promise<{ content: number; client: number }> {
+  const metrics = await page.evaluate(() => {
+    const element = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
+    if (!element) return null;
+    return { content: element.scrollHeight, client: element.clientHeight };
+  });
+  expect(metrics, "the conversation did not mount").not.toBeNull();
+  return metrics!;
 }
 
 test.describe("chat entry scroll", () => {
@@ -216,18 +263,71 @@ test.describe("chat entry scroll", () => {
     // costs nothing and is never seen; deferring it by a frame, which is what it
     // used to do, paints the gap first. Same defect as the entry, different
     // trigger, and this is the one the reader meets while simply resizing.
+    //
+    // The width is narrowed and the height is held, and both halves of that are
+    // load-bearing.
+    //
+    // This test used to go from 1920x1080 to 900x900 in one step and claimed the
+    // rewrap as its mechanism. Measured, it had neither. The conversation column
+    // is capped, so its content is 4505px tall at every scrollport width from
+    // 480 to 1520 — 1920 and 900 both land in that range and NOTHING rewraps.
+    // What did change was the scrollport's height, 1036 to 856, which is the
+    // keyboard mechanism of D-058 and already has its own test at a 4px bound.
+    // The 180px it intermittently reported was that height change and never the
+    // reflow this test is named after.
+    //
+    // 800 wide, because the sweep says the wrap only moves below a scrollport of
+    // about 480: at a 1920 window the scrollport is 1520 and the content 4505,
+    // at an 800 window it is 440 and the content 5597. The desktop layout is
+    // kept, so the chrome above the list does not change and the scrollport
+    // keeps its height. 320 for the phone projects, which are already narrower
+    // than 800 and rewrap between 360 and 320.
     await openCapture(page);
     await page.waitForTimeout(1_200);
 
-    await page.evaluate((key) => {
-      (window as unknown as Record<string, unknown[]>)[key].length = 0;
-    }, SAMPLES_KEY);
+    const size = page.viewportSize();
+    expect(size, "the project has no viewport to narrow").not.toBeNull();
+    const before = await conversationMetrics(page);
 
-    await page.setViewportSize({ width: 900, height: 900 });
+    await page.evaluate(([samples, resizes]) => {
+      (window as unknown as Record<string, unknown[]>)[samples].length = 0;
+      (window as unknown as Record<string, unknown[]>)[resizes].length = 0;
+    }, [SAMPLES_KEY, RESIZES_KEY]);
+
+    await page.setViewportSize({
+      width: size!.width >= 800 ? 800 : 320,
+      height: size!.height,
+    });
     await page.waitForTimeout(1_200);
 
-    const distances = await distancesFromBottom(page);
-    expect(distances.length, "no frame was recorded after the resize").toBeGreaterThan(5);
+    // The premise, asserted rather than assumed, because the version of this
+    // test that assumed it spent months measuring something else.
+    const after = await conversationMetrics(page);
+    expect(
+      after.content - before.content,
+      "the conversation did not grow, so the reflow this test is named after did not happen",
+    ).toBeGreaterThan(40);
+    expect(
+      after.client,
+      "the scrollport changed height, so this is the keyboard mechanism and not the reflow",
+    ).toBe(before.client);
+
+    const acknowledged = (
+      await page.evaluate(
+        (key) => (window as unknown as Record<string, number[]>)[key] ?? [],
+        RESIZES_KEY,
+      )
+    )[0];
+    expect(
+      acknowledged,
+      "the page never received a resize event, so no frame here can be attributed to the application",
+    ).not.toBeUndefined();
+
+    const distances = await distancesFromBottom(page, acknowledged);
+    expect(
+      distances.length,
+      "no frame was recorded after the page was told its viewport had changed",
+    ).toBeGreaterThan(5);
     const worst = Math.max(...distances);
     expect(worst, `a frame was painted ${worst}px from the bottom after the reflow`).toBeLessThanOrEqual(40);
   });

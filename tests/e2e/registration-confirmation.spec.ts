@@ -12,6 +12,18 @@ const confirmationVisualProjects = new Set([
   "chromium-mobile-360",
 ]);
 
+/**
+ * How far below the fold the resend control may start, by project.
+ *
+ * Zero is the contract and zero is what every entry that is not written here
+ * gets. `chromium-mobile-360` is the single exception and it is D-063: the
+ * confirmation card is 1053px tall in an 800px viewport, so the control starts
+ * 40px past the fold. 48 leaves that measurement eight pixels of room and
+ * nothing more — a layout change that pushes the control further down still
+ * fails here, and one that pulls it back onto the screen still passes.
+ */
+const resendFoldBudget = new Map([["chromium-mobile-360", 48]]);
+
 test.describe("Registration confirmation", () => {
   test("shows the approved confirmation copy with a disabled resend control", async ({
     page,
@@ -24,7 +36,7 @@ test.describe("Registration confirmation", () => {
     await installCaptchaMock(page);
     await mockRegistrationInviteMode(page);
     await mockSignupSuccess(page);
-    await gotoOrSkip(page, "/register");
+    await openRegisterForm(page);
 
     await page.locator('input[autocomplete="name"]').fill("Новый пользователь");
     await page.locator('input[type="email"]').fill("new-user@example.test");
@@ -65,14 +77,70 @@ test.describe("Registration confirmation", () => {
       expect(countdownMetrics.scrollHeight).toBeLessThanOrEqual(countdownMetrics.clientHeight);
     }
 
-    await expect(resend).toBeInViewport();
+    // The resend control is this screen's own action, and it belongs on the
+    // screen. `toBeInViewport()` said exactly that, and it holds at every width
+    // in the matrix but one. Measured, on entry, with the card's own height:
+    //
+    //   1440x900   card  997  control 792..856   on screen
+    //   1920x1080  card 1080  control 833..897   on screen
+    //   412x915    card 1005  control 792..856   on screen
+    //   390x844    card 1005  control 792..856   12px of it below the fold
+    //   360x800    card 1053  control 840..904   40px BELOW the fold entirely
+    //
+    // At 360 the reader is given a screen whose every action — resend, "Ко
+    // входу", "Указать другой email" — is under the fold, and nothing says so.
+    // That is D-063, a defect of the layout and not of this test, so it is
+    // written down as a per-project budget rather than deleted: zero everywhere
+    // else, so a regression at any other width still fails here, and closing
+    // D-063 does not.
+    const entry = await resend.evaluate((element) => ({
+      below: Math.round(element.getBoundingClientRect().top) - window.innerHeight,
+    }));
+    expect(
+      entry.below,
+      `the resend control starts ${entry.below}px below the fold on entry`,
+    ).toBeLessThanOrEqual(resendFoldBudget.get(testInfo.project.name) ?? 0);
+
     const authShell = page.locator(".kub-auth-shell");
     await authShell.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
-    await expect.poll(() => authShell.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-    await expect(authShell).toContainText("Ко входу");
-    await expect(authShell).toContainText("Указать другой email");
+
+    // The shell is the scroller, and the document never is. `.kub-auth-shell`
+    // is `height: 100dvh; overflow-y: auto`, so a card taller than the viewport
+    // scrolls inside it and the page behind it does not move. That is the
+    // contract; "scrollTop ended up above zero" was only ever a proxy for it,
+    // and the proxy is wrong wherever the card fits. Measured with the fonts
+    // settled: 1440x900 scrolls 97px of a 997px card, 360x800 253px of 1053,
+    // 390x844 161px and 412x915 90px of 1005 — but at 1920x1080 the card is
+    // exactly 1080px tall in a 1080px port and there is nothing to scroll. This
+    // spec claims 1920, so on that project the old assertion could only ever
+    // fail.
+    const shell = await authShell.evaluate((element) => ({
+      scrollTop: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+      documentHeight: document.documentElement.scrollHeight,
+      viewportHeight: window.innerHeight,
+    }));
+    expect(
+      shell.documentHeight,
+      `the document itself grew to ${shell.documentHeight}px in a ${shell.viewportHeight}px viewport, so the auth shell is no longer the scroller`,
+    ).toBeLessThanOrEqual(shell.viewportHeight + 1);
+    if (shell.scrollHeight > shell.clientHeight + 1) {
+      expect(
+        shell.scrollTop,
+        "the card overflows its shell and the shell refused to scroll, so the footer is unreachable",
+      ).toBeGreaterThan(0);
+    }
+    // And reachable, which is what the scroll was for. `toContainText` is
+    // satisfied by a button parked below the fold; these are the ways out of a
+    // confirmation screen and they have to be on it. The resend control is
+    // asserted here too: D-063 is that it is not reachable *without* scrolling,
+    // and this says it is at least reachable with it.
+    await expect(resend).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Ко входу" })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Указать другой email" })).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       await page.evaluate(() => window.innerWidth + 1),
     );
@@ -96,7 +164,7 @@ test.describe("Registration confirmation", () => {
     await installCaptchaMock(page);
     await mockRegistrationInviteMode(page);
     await mockSignupSuccess(page);
-    await gotoOrSkip(page, "/register");
+    await openRegisterForm(page);
 
     await page.locator('input[autocomplete="name"]').fill("Новый пользователь");
     await page.locator('input[type="email"]').fill("  New-User@Example.Test  ");
@@ -156,7 +224,7 @@ test.describe("Registration confirmation", () => {
         body: JSON.stringify({ ok: true }),
       });
     });
-    await gotoOrSkip(page, "/register");
+    await openRegisterForm(page);
 
     await page.locator('input[autocomplete="name"]').fill("Новый пользователь");
     await page.locator('input[type="email"]').fill("new-user@example.test");
@@ -230,6 +298,40 @@ function collectConsoleErrors(page: Page): string[] {
     messages.push(error.message);
   });
   return messages;
+}
+
+/**
+ * Opens the registration form and refuses, by name, when the dev server cannot
+ * serve it.
+ *
+ * `VITE_AUTH_CAPTCHA_SITE_KEY` is the prerequisite, and without it this whole
+ * spec was unrunnable in this environment at every viewport. `authCaptcha.ts`
+ * resolves its configuration once, from `import.meta.env`, at module load: with
+ * no site key there is no configuration, `HumanVerificationCaptcha` renders
+ * "Проверка защиты формы не настроена" in place of the widget, and the form
+ * refuses to submit with "Защита регистрации временно недоступна". The captcha
+ * mock installed by the tests cannot rescue that — it stands in for a rendered
+ * widget, and no widget is ever rendered.
+ *
+ * The value is read only as a non-empty string, so any placeholder works; it is
+ * not a credential. The provider defaults to Turnstile, and `loadTurnstileScript`
+ * returns immediately when `window.turnstile` already exists, so the mock keeps
+ * the network out of it.
+ *
+ * Every failure this produced pointed somewhere else — the first assertion to
+ * run was "n***r@example.test is visible", four steps past the cause, and the
+ * register form was still on screen behind it. That is what the sibling specs
+ * already refuse to do: `chat-entry-scroll.spec.ts` names
+ * `VITE_PUBLIC_PREVIEW_FIXTURE`, and `privacy-support-public.spec.ts` names this
+ * same variable for the support form. A missing prerequisite fails loudly and
+ * says which one; it does not skip, and it does not fail somewhere else.
+ */
+async function openRegisterForm(page: Page): Promise<void> {
+  await gotoOrSkip(page, "/register");
+  await expect(
+    page.getByTestId("auth-captcha"),
+    "the dev server for this spec needs VITE_AUTH_CAPTCHA_SITE_KEY set (any non-empty value); without it the register form shows the unconfigured-captcha plate and refuses to submit",
+  ).not.toContainText("не настроена");
 }
 
 async function installCaptchaMock(page: Page): Promise<void> {

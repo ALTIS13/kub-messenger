@@ -4031,6 +4031,47 @@ the medians are the honest number and a single run is not.
 **Guarded** by `tests/unit/shell-glass.test.mjs`, per chip, found by the
 landmark on its wrapper rather than by a line number.
 
+## D-063 Every action on the confirmation screen is under the fold at 360
+
+**Severity:** medium. Every phone 360 CSS px wide or narrower, on the screen a
+person reaches immediately after creating an account. Not cosmetic: the screen
+offers three controls and shows none of them.
+
+**Surface:** the registration confirmation card in `RegisterForm.tsx` — the
+resend button, "Ко входу" and "Указать другой email".
+
+**Defect:** the card is taller than the viewport and the page opens at its top,
+so the controls are below the fold. Measured on entry, before any scrolling:
+
+| viewport | card height | resend control | on screen |
+| --- | --- | --- | --- |
+| 1440x900 | 997 | 792..856 | yes |
+| 1920x1080 | 1080 | 833..897 | yes |
+| 412x915 | 1005 | 792..856 | yes |
+| 390x844 | 1005 | 792..856 | 12px of it clipped |
+| **360x800** | **1053** | **840..904** | **no — starts 40px past the fold** |
+
+At 360 the fold falls just under the captcha plate, so the last thing the reader
+sees is "Подтверждение защиты станет доступно после окончания таймера." and
+nothing below it. The resend button, the way back to the login form and the way
+back to the registration form are all off screen, and the card carries no
+affordance saying there is more.
+
+The 48px between 360 and 390 is one extra wrapped line in each of the two
+explanatory paragraphs; the card is 1053px at 360 against 1005px at 390.
+
+**Not fixed here.** Closing it is a layout decision about which of the three
+paragraphs, the illustration, the masked address or the always-rendered captcha
+plate gives up its height, and that belongs to the interface audit stage
+(tracker queue item 18) rather than to the test work that found it.
+
+**Pinned** by `tests/e2e/registration-confirmation.spec.ts`, which allows the
+control to start below the fold only at `chromium-mobile-360` and only by 48px
+against the 40 measured. Every other project's budget is zero, so the same defect
+appearing at another width fails, this one growing fails, and closing it passes.
+The same test also asserts that the control is reachable once the shell is
+scrolled, which is the part that does hold today.
+
 ## Measured on the device, and not a defect
 
 **The scroll contracts hold, by finger rather than by wheel.** Chat entry with
@@ -4147,21 +4188,128 @@ A first attempt at this weakened the bound instead, by ignoring a reading the
 next frame contradicted. That is wrong and was reverted: the mutation above paints
 exactly one frame 4797px out, and a reader sees it.
 
-**An intermittent worth knowing about.** `content that grows under a pinned list
-is not painted out of place` failed once at `chromium-desktop-1920` with 180px,
-in one full six-project run of 66 tests, and passed 4/4 in isolation and 66/66 on
-the next full run. The test resizes the window from 1920x1080 to 900x900 in one
-step, which is a resize no reader produces and the shape most likely to reach the
-ResizeObserver loop limit — at that limit the remaining notifications are
-deferred to the next frame and the frame really is painted uncorrected. Left as
-it is rather than loosened, and recorded so the next person to see it knows it
-has been seen.
+**An intermittent worth knowing about — since found, and it was neither the
+ResizeObserver loop limit nor the app.** `content that grows under a pinned list
+is not painted out of place` failed once at `chromium-desktop-1920` with 180px in
+one full six-project run, and passed 4/4 in isolation and 66/66 on the next.
+Reproduced deliberately at eight concurrent lanes it fails **28 times in 64**, so
+it was never rare, only load-dependent. The guess written here was that a
+1920x1080 to 900x900 step reaches the ResizeObserver loop limit. It does not:
+across 128 traced runs the page recorded **zero** "ResizeObserver loop completed
+with undelivered notifications" errors. Two things were actually wrong.
 
-**`registration-confirmation.spec.ts` cannot run in this environment**, at any
-viewport. It fails identically at `chromium-desktop-1440` and
-`chromium-mobile-412` with and without the 360 entry, so it is a missing
-prerequisite of the fixture dev server rather than anything the new project did.
-Its 360 coverage is therefore declared but unproven.
+*The test's stated mechanism did not exist.* The conversation column is capped,
+so its content is 4505px tall at every scrollport width from 480 to 1520.
+1920 and 900 both land inside that range and **nothing rewrapped**: content
+height was 4505 before the resize and 4505 after it, measured on every run. The
+only thing that changed was the scrollport's height, 1036 to 856, which is the
+D-058 keyboard mechanism and already has its own test at a 4px bound. The 180px
+this reported was that height change — 1036 − 856 = 180, exactly — and never the
+reflow the test is named after.
+
+*And the frames it counted were frames the page had not been told about.*
+`page.setViewportSize` reaches the renderer as a device-metrics override, and
+Chromium applies that override to layout before the document runs its resize
+steps. Traced at 1920, with a timestamp on every reading:
+
+```
+3489 raf top=3469 h=4505 c=1036 inner=1080x1920
+3524 raf top=3469 h=4505 c=856  inner=900x900    <- layout already resized
+3536 raf top=3469 h=4505 c=856  inner=900x900    <- and again
+3543 resize inner=900x900                        <- the page is told here
+3548 ro-fire n=2
+3548 ro  top=3649 h=4505 c=856  inner=900x900    <- corrected, same frame
+```
+
+Two frames were laid out at the new size with no resize event and no observer
+notification delivered. No application can place a list in those two frames: it
+has not been told, by any API, that anything moved. A real window resize does not
+split this way — the size change, the resize steps and the observer broadcast
+belong to one rendering lifecycle.
+
+**Fixed by making the test measure its own mechanism.** It now narrows the width
+and holds the height — 800 on the desktop projects, where the scrollport goes
+1520 to 440 and the content 4505 to 5597, and 320 on the phones — and asserts
+both halves of that premise rather than assuming them: the content must have
+grown, and the scrollport must not have changed height. Frames are counted from
+the page's own `resize` event onward. Under the identical eight-lane load that
+produced 28 failures in 64, the new formulation is **0 in 64**, with about 75
+frames still counted per run.
+
+It is not more forgiving. Deferring `applyBottomNow` by a single frame inside the
+observer — the shape of D-037 and D-038 — fails it at **all six projects** with
+`a frame was painted 1092px from the bottom after the reflow`, where the old
+formulation could only ever have seen 180.
+
+**A second intermittent, in the neighbouring test, still open.** `no painted
+frame shows the list away from the bottom on entry` fails at
+`chromium-desktop-3840` with 1092px. It is not the same thing and it is not
+caused by the change above: run alternately in the same eight lanes under the
+same load, the pre-change spec failed **7 of 32** and the post-change spec **6 of
+32**, and both report the identical value. Traced, it is the web font arriving
+after the conversation has mounted:
+
+```
+4224 raf top=1297 h=3413 c=2116   <- at the bottom
+4240 raf top=1297 h=4505 c=2116   <- content grew 1092px in one step
+4258 raf top=1297 h=4505 c=2116
+4272 fonts-loadingdone            <- the font is only reported done here
+4272 raf top=1297 h=4505 c=2116
+4300 ro-fire n=1
+4300 ro  top=2389 h=4505 c=2116   <- corrected, three frames later
+```
+
+The whole history rewraps when the face swaps, which is 1092px at this fixture,
+and the observer is delivered three frames behind it. Two things are unresolved
+and both need their own measurement rather than a guess. Whether those three
+frames were painted with the new layout at all, or whether the sampler's own
+forced read in `requestAnimationFrame` is what pulled the relayout forward —
+which is the D-039 error one level deeper, and would need a screencast to settle,
+not another sampler. And whether the reflow should happen at all: a face that
+swaps a second after the conversation opens moves the whole history under the
+reader, and preloading it or holding the metrics would remove the event instead
+of correcting it. Left open and written down rather than loosened; the rate is
+about one run in five at 3840 under eight-way load and near zero without it.
+
+**`registration-confirmation.spec.ts` could not run in this environment** at any
+viewport, and the missing prerequisite is **`VITE_AUTH_CAPTCHA_SITE_KEY`**.
+`authCaptcha.ts` resolves its configuration once, at module load, from
+`import.meta.env`; with no site key there is no configuration, the register form
+renders "Проверка защиты формы не настроена" where the widget belongs and refuses
+to submit with "Защита регистрации временно недоступна". The captcha mock in the
+spec stands in for a *rendered* widget and cannot help, so all three tests died
+four steps later on `n***r@example.test is visible` — a message that says nothing
+about the cause. The spec now refuses at the first step and names the variable,
+the way `chat-entry-scroll.spec.ts` names `VITE_PUBLIC_PREVIEW_FIXTURE` and
+`privacy-support-public.spec.ts` names this same one. Started with it set, the
+spec passes 7/7 across the matrix and its 360 coverage is proven rather than
+declared. The dev server the interface specs want, from PowerShell — Git Bash
+rewrites `BASE_PATH` and every route then answers 302:
+
+```powershell
+$env:PORT = '5250'
+$env:BASE_PATH = '/'
+$env:VITE_PUBLIC_PREVIEW_FIXTURE = '1'
+$env:VITE_SUPABASE_URL = 'http://127.0.0.1:54321'
+$env:VITE_SUPABASE_ANON_KEY = 'playwright-public-fixture'
+$env:VITE_AUTH_CAPTCHA_SITE_KEY = 'playwright-captcha-site-key'
+pnpm.cmd --filter @workspace/kub run dev
+```
+
+None of those values is a credential: the Supabase pair points at a loopback
+address that nothing is listening on, and the site key is read only as a
+non-empty string. The provider defaults to Turnstile, whose loader returns
+immediately when `window.turnstile` already exists, so the specs' own mock keeps
+the network out of it.
+
+Two things surfaced the moment it could run. At `chromium-desktop-1920` the
+confirmation card is exactly 1080px tall in a 1080px port, so
+`expect(shell.scrollTop).toBeGreaterThan(0)` could never hold there — the
+assertion presumed an overflow that only exists at the other widths (1440
+scrolls 97px of 997, 360 253px of 1053, 390 161px and 412 90px of 1005; 3840 is
+2160 in 2160 and does not scroll either). It now asserts what that was a proxy
+for: the shell is the scroller and the document never is, and the shell scrolls
+whenever the card overflows it. The second is D-063.
 
 ## Evidence for the closures, and what was touched on the device
 
