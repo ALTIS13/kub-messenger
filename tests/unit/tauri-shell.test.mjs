@@ -559,29 +559,57 @@ test("Windows startup uses one main window and a local approved handshake scene"
   assert.match(css, /prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.rail i \{ animation: none; \}/);
 
   // -- The stage track --------------------------------------------------------
-  // It was four 4px bars with 10px gaps, which read as a dotted rule or as
-  // underlines beneath four fields rather than as one indicator, and its active
-  // segment was animated on --kub-motion-shimmer, .kub-skeleton's own timing,
-  // so a working screen looked like one that had failed to load.
+  // Two rebuilds sit behind this. It was first four 4px bars with 10px gaps,
+  // which read as a dotted rule rather than as one indicator. It then became
+  // one recessed channel, and that was reported as looking dated three
+  // separate times. The cause was five period signals stacked on a single
+  // 680px object: a bevelled channel, a 7px height, notches cutting it into
+  // four segments, a gradient running along the fill, and a pulsing radial
+  // glow at the head. Every one of them had been added to make the object
+  // richer, and richness is what aged it.
   //
-  // One recessed channel, spanning the whole block, with one fill.
+  // Each of the five is pinned below as an assertion that it stays gone. They
+  // are not hypothetical: all five were written deliberately once, so all five
+  // can be written deliberately again.
+  const cssBody = css.replace(/\/\*[\s\S]*?\*\//g, "");
   assert.match(css, /\.stages\s*\{[^}]*gap:\s*0;/s, "the track is one object, so the columns carry no gaps");
   assert.match(
-    css,
-    /\.stages::before\s*\{[^}]*left:\s*0;\s*right:\s*0;[^}]*height:\s*var\(--track-height\);[^}]*background:\s*var\(--kub-bg\);[^}]*inset 0 1px 2px/s,
-    "the track must span the block and be recessed into it",
+    cssBody,
+    /\.stages\s*\{[^}]*--track-height:\s*[0-4]px;/s,
+    "a modern determinate track is 2-4px; 7px carrying decoration is a download-manager meter",
   );
   assert.match(
-    css,
-    /\.stages::after\s*\{[^}]*background-size:\s*var\(--fill\) 100%;/s,
-    "the fill is one continuous run, sized by background-size so no box is laid out again",
+    cssBody,
+    /\.stages::before\s*\{[^}]*left:\s*0;\s*right:\s*0;[^}]*height:\s*var\(--track-height\);/s,
+    "the track must span the block",
   );
-  // Stage boundaries are cut into the track, not made by holding the pieces
-  // apart; that is what keeps it a single object.
+  assert.doesNotMatch(
+    cssBody,
+    /\.stages::before\s*\{[^}]*(?:box-shadow|border)\s*:/s,
+    "the track stays flat: a bevelled channel is the strongest dated signal this screen ever carried",
+  );
   assert.match(
-    css,
-    /\.stages li \+ li::before\s*\{[^}]*width:\s*2px;\s*height:\s*var\(--track-height\);\s*background:\s*var\(--kub-bg\);/s,
-    "the divisions must be notches in the track",
+    cssBody,
+    /\.stages::after\s*\{[^}]*background-color:\s*var\(--track-accent\);/s,
+    "the fill is one solid colour; a gradient along its length is decoration from the same period",
+  );
+  // The fill is revealed rather than sized, and that is also what confines the
+  // travelling highlight to the filled length instead of letting it paint on
+  // the empty track ahead of the head.
+  assert.match(
+    cssBody,
+    /\.stages::after\s*\{[^}]*clip-path:\s*inset\(0 calc\(100% - var\(--fill\)\) 0 0 round 999px\);/s,
+    "the fill is revealed by clip-path, which is what clips the highlight to it",
+  );
+  assert.doesNotMatch(
+    cssBody,
+    /\.stages li \+ li::before/,
+    "the stage division belongs to the four labels; notches through the track read as a battery gauge",
+  );
+  assert.doesNotMatch(
+    cssBody,
+    /\.stages[^{}]*\{[^}]*radial-gradient/s,
+    "no glowing head: a radial pulse on the fill is a gamer overlay, not a system screen",
   );
   // Three levels of label, so the row reads without the track.
   assert.match(css, /\.stages li\.is-done \{ color: var\(--kub-muted\); \}/);
@@ -607,12 +635,21 @@ test("Windows startup uses one main window and a local approved handshake scene"
     }
   }
   assert.match(
-    css,
-    /\.stages li\.is-active::after\s*\{[^}]*animation: stage-head calc\(var\(--kub-motion-standard\) \* 12\)/s,
+    cssBody,
+    /\.stages::after\s*\{[^}]*animation: stage-sheen calc\(var\(--kub-motion-standard\) \* \d+\)/s,
+  );
+  // The highlight is a claim that work is in flight. A halted sequence that
+  // still shows movement says the shell is working on it; `recoverable_error`
+  // is a screen the person sits in front of, so that claim would be a lie for
+  // as long as they look at it.
+  assert.match(
+    cssBody,
+    /body\[data-stage="complete"\] \.stages::after,\s*body\[data-stage="recoverable_error"\] \.stages::after \{ animation: none; \}/,
+    "the sheen must stop when the sequence stops, both on success and on a halt",
   );
   assert.match(
     css,
-    /prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.stages li\.is-active::after \{ animation: none; \}/,
+    /prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.stages::after \{ animation: none; \}/,
     "the head's pulse must stop, not merely shorten",
   );
   assert.match(css, /prefers-reduced-motion/);

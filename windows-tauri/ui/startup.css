@@ -524,49 +524,72 @@ body[data-verdict="changed"] .center-seal {
 .startup-scope { margin: 0 0 16px; color: var(--kub-muted); font-size: 11.5px; line-height: 15px; text-align: center; width: min(680px, 78vw); }
 
 /* -- Stage track -------------------------------------------------------------
- * One object, not four. Four 4px bars separated by 10px gaps read as a dotted
- * rule or as underlines beneath four fields; nothing joined them into a single
- * indicator. This is one recessed channel with one continuous fill, and the
- * stage boundaries are notches cut into it rather than gaps between separate
- * pieces, so the division is visible without the object coming apart.
+ * One object, not four, and drawn flat.
  *
- * The previous version also animated its active segment on
- * --kub-motion-shimmer, which is .kub-skeleton's timing. That made a working
- * screen look like one that had failed to load. Nothing here uses that timing:
- * the only movement is a slow pulse on the head of the fill, several times
- * longer and much weaker than a skeleton, and it stops entirely under reduced
- * motion — a part-filled track already says "in progress" standing still.
+ * The version before this one was reported as looking dated three times, and
+ * the cause was five separate period signals stacked on one 680px object: a
+ * bevelled channel (`inset 0 1px 2px` at .55 black, the defining move of Aqua
+ * and Windows 7), a 7px height when a modern determinate bar is 2-4px, notches
+ * cutting it into four segments so it read as a battery gauge, a gradient
+ * running along the fill, and a pulsing radial glow at the head. Each had been
+ * added to make the object richer. Richness is what aged it: this reads as
+ * current by restraint, not by decoration.
+ *
+ * So: no bevel, no border, no notches, no length gradient, no glow. A flat
+ * 4px track tinted from the accent, a solid fill, and the four labels beneath
+ * carrying the division that the notches used to draw.
+ *
+ * Motion. A part-filled track says "in progress" standing still, but a stage
+ * can legitimately run for tens of seconds (a network timeout), and a frozen
+ * bar for that long reads as a hang. The liveness is one soft highlight
+ * travelling along the fill — confined to it by clip-path, so nothing paints
+ * on the empty track ahead of the head. Its loop is 8x --kub-motion-standard,
+ * well clear of .kub-skeleton's timing, so a working screen never looks like
+ * one that failed to load. It stops entirely under reduced motion.
  */
 .stages {
   position: relative; isolation: isolate;
-  --track-height: 7px;
+  --track-height: 4px;
   --fill: 0%;
   width: min(680px, 78vw);
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
   margin: 0; padding: 0; list-style: none;
 }
-/* The channel: darker than the surface it sits on, with the light catching its
-   top edge, so it reads as cut into the page rather than drawn on it. */
+/* The track: flat, tinted from the accent so it belongs to the fill rather
+   than to the page, and low enough not to compete with it. 28% and not less —
+   the unfilled length is what makes this a measure of progress rather than a
+   line that stops somewhere, and at 18% on a near-black panel a 4px run was
+   legible only under magnification. */
 .stages::before {
   content: ""; position: absolute; z-index: 0; top: 0; left: 0; right: 0;
   height: var(--track-height); border-radius: 999px;
-  background: var(--kub-bg);
-  box-shadow: inset 0 1px 2px rgb(0 0 0 / .55), inset 0 0 0 1px var(--kub-border-color);
+  background: color-mix(in srgb, var(--track-accent) 28%, transparent);
 }
-/* The fill: one unbroken run from the left edge to the head, brightest at the
-   head. Sized by background-size rather than by width, so the fill grows
-   without any box being laid out again. */
+/* The fill: one solid run from the left edge to the head. Revealed by
+   clip-path rather than sized by a box, so it grows without a relayout and so
+   the travelling highlight above is clipped to the filled length exactly. */
 .stages::after {
   content: ""; position: absolute; z-index: 1; top: 0; left: 0; right: 0;
   height: var(--track-height); border-radius: 999px;
+  background-color: var(--track-accent);
   background-image: linear-gradient(90deg,
-    color-mix(in srgb, var(--track-accent) 34%, transparent) 0%,
-    color-mix(in srgb, var(--track-accent) 68%, transparent) 60%,
-    var(--track-accent) 100%);
-  background-size: var(--fill) 100%;
+    transparent 0%, rgb(255 255 255 / .32) 50%, transparent 100%);
+  background-size: 34% 100%;
   background-repeat: no-repeat;
-  transition: background-size var(--kub-motion-emphasis) var(--kub-ease-standard);
+  clip-path: inset(0 calc(100% - var(--fill)) 0 0 round 999px);
+  transition: clip-path var(--kub-motion-emphasis) var(--kub-ease-standard);
+  animation: stage-sheen calc(var(--kub-motion-standard) * 8) var(--kub-ease-standard) infinite;
 }
+@keyframes stage-sheen {
+  0% { background-position-x: -40%; }
+  100% { background-position-x: 140%; }
+}
+/* The highlight is the claim that work is in flight, so it stops the moment
+   that stops being true. `complete` is brief, but `recoverable_error` is a
+   screen the person sits in front of: a sheen still sliding along a sequence
+   that has halted says the shell is working on it, and it is not. */
+body[data-stage="complete"] .stages::after,
+body[data-stage="recoverable_error"] .stages::after { animation: none; }
 /* The head sits at the middle of the stage in flight: that stage has started
    and has not finished, and the middle is the only honest place to put it. */
 body[data-stage="network_check"] .stages { --fill: 12.5%; }
@@ -586,31 +609,11 @@ body[data-stage="recoverable_error"][data-verdict="changed"] .stages { --fill: 5
   font-size: 11px; line-height: 14px; text-align: center;
   transition: color var(--kub-motion-standard) var(--kub-ease-standard);
 }
-/* Notches, cut through the fill in the page's own colour, so the track stays
-   one object while the four stages stay countable. */
-.stages li + li::before {
-  content: ""; position: absolute; z-index: 2; top: 0; left: 0;
-  width: 2px; height: var(--track-height);
-  background: var(--kub-bg);
-}
+/* The stage division is carried by the four labels alone. Notches drawn
+   through the track were the single most dated signal on this object, and they
+   were redundant: the labels already sit one per stage, directly beneath. */
 .stages li.is-done { color: var(--kub-muted); }
 .stages li.is-active { color: var(--kub-text); }
-/* The head's glow, and the only thing on this indicator that moves. Twelve
-   times --kub-motion-standard is 2.64s, more than twice .kub-skeleton's loop
-   and far shallower, so it reads as something working rather than something
-   still loading. */
-.stages li.is-active::after {
-  content: ""; position: absolute; z-index: 1; pointer-events: none;
-  top: calc(var(--track-height) / 2); left: 50%;
-  width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
-  background: radial-gradient(closest-side,
-    color-mix(in srgb, var(--track-accent) 52%, transparent), transparent 100%);
-  animation: stage-head calc(var(--kub-motion-standard) * 12) var(--kub-ease-standard) infinite;
-}
-@keyframes stage-head {
-  0%, 100% { opacity: .5; }
-  50% { opacity: 1; }
-}
 
 /* ── Hints ───────────────────────────────────────────────────────────────────
  * This screen cannot avoid words a person has no reason to know — отпечаток,
@@ -760,7 +763,7 @@ button.is-quiet:hover { background: var(--kub-surface-3); color: var(--kub-text)
      a reduction. Neither carries information — the fill's length says how far
      the sequence has got, and the channel's colour says what state it is in,
      and both of those still read standing still. */
-  .stages li.is-active::after { animation: none; }
+  .stages::after { animation: none; }
   .rail i { animation: none; }
   /* The hint still opens and still waits before opening — a delay is not
      motion. What goes is the scale, which is. */

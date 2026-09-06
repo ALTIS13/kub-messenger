@@ -38,15 +38,25 @@ const js = readFileSync(new URL("../../windows-tauri/ui/startup.js", import.meta
 test("the fill advances rather than jumping", () => {
   const fill = css.match(/\.stages::after \{([^}]*)\}/);
   assert.ok(fill, "the track's fill rule is missing");
+  // The fill is revealed by clip-path rather than sized by background-size —
+  // that is what confines the travelling highlight to the filled length. What
+  // this test has always been about is unchanged: the length must move over a
+  // shared duration rather than snap between stages.
   assert.match(
     fill[1],
-    /transition:\s*background-size\s+var\(--kub-motion-[a-z]+\)/,
+    /transition:\s*clip-path\s+var\(--kub-motion-[a-z]+\)/,
     "the fill's length must transition, and on one of the shared durations",
   );
-  // Sized by background-size, not width: the fill grows without any box being
-  // laid out again, which is what keeps a 300ms run of stage changes from
-  // costing four layouts.
-  assert.match(fill[1], /background-size:\s*var\(--fill\)/);
+  // Revealed, not resized: the fill grows without any box being laid out
+  // again, which is what keeps a 300ms run of stage changes from costing four
+  // layouts. clip-path does that exactly as background-size did; `width`,
+  // which is the obvious way to write this, would not.
+  assert.match(fill[1], /clip-path:\s*inset\(0 calc\(100% - var\(--fill\)\)/);
+  assert.doesNotMatch(
+    fill[1],
+    /(?:^|[^-\w])width:/,
+    "the fill must not grow by resizing a box",
+  );
 });
 
 test("each stage is given more of the track than the one before it", () => {
@@ -84,7 +94,7 @@ test("reduced motion stops the loops and collapses the durations", () => {
   // The two ambient loops are removed outright. Collapsing their duration would
   // leave them cycling every few milliseconds, which is a flicker rather than a
   // reduction, and neither carries information the scene needs.
-  assert.match(block, /\.stages li\.is-active::after \{ animation: none; \}/);
+  assert.match(block, /\.stages::after \{ animation: none; \}/);
   assert.match(block, /\.rail i \{ animation: none; \}/);
 });
 
