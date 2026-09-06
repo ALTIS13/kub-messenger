@@ -61,5 +61,24 @@ export default defineConfig({
         viewport: { width: 412, height: 915 },
       },
     },
+    {
+      // Safari's engine, which no project above had ever exercised — six
+      // Chromium viewports and not one WebKit. D-062 is what that cost: the
+      // chat header painted under the conversation, so on an iPhone there was
+      // no way to leave a chat at all, in the installed PWA and in a Safari
+      // tab alike. It reproduced here on the first run, and no width of
+      // Chromium can see it, because the mechanism is `order` on a positioned
+      // box — which Chromium honours for painting and WebKit does not.
+      //
+      // One project, deliberately: the engine is the variable worth having,
+      // and the viewport matrix above is already the width coverage.
+      name: "webkit-mobile-390",
+      use: {
+        ...devices["iPhone 14 Pro"],
+        // The installed PWA gets the whole screen rather than Safari's shorter
+        // tab viewport, and 390x844 is the iPhone the report came from.
+        viewport: { width: 390, height: 844 },
+      },
+    },
   ],
 });

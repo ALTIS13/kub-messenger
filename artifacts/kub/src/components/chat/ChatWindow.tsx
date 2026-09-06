@@ -803,62 +803,6 @@ export function ChatWindow({ chatId }: ChatWindowProps) {
         </div>
       )}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div
-          ref={chromeRef}
-          // Over the conversation, not above it. Taken out of the column's flow
-          // so the list can have the whole pane and the glass something to
-          // frost; the list pays it back as padding, measured from this box.
-          //
-          // Still the first thing in the column's markup, which is the point of
-          // doing it this way: reading order and tab order are unchanged, and
-          // the header keeps its plain `relative` box, so the menu and dialogs
-          // it opens are laid out against the viewport exactly as before.
-          className="absolute inset-x-0 top-0 flex flex-col"
-          data-testid="chat-chrome-stack"
-        >
-          <ChatHeader
-            chatId={chatId}
-            chat={chat}
-            onSearchOpen={() => setShowSearch(true)}
-            onInfoOpen={() => setShowInfo(true)}
-            onClearForMe={clearChatForMe}
-            mediaPlayback={<ChatMediaPlaybackBar compact />}
-          />
-
-          {isForum && (
-            <TopicStrip
-              topics={topics}
-              canManage={canManageTopics}
-              onCreate={createTopic}
-            />
-          )}
-
-          {showSearch && (
-            <ChatSearchBar
-              chatId={chatId}
-              currentTopicId={messageTopicId}
-              isForum={isForum}
-              messages={messages}
-              onClose={() => setShowSearch(false)}
-              onJumpTo={handleSearchJump}
-            />
-          )}
-
-          {pinError && (
-            <div className="mx-3 mt-2 rounded-lg border border-[color:var(--kub-border-color)] bg-[var(--kub-surface)] px-3 py-2 text-xs text-[color:var(--kub-muted)]">
-              {pinError}
-            </div>
-          )}
-
-          {pinnedReady && pinnedMessages.length > 0 && (
-            <PinnedMessage
-              messages={pinnedMessages}
-              onJump={handleJumpToPinned}
-              onUnpin={userId ? (msg) => void handleTogglePin(msg) : undefined}
-            />
-          )}
-        </div>
-
         {loading ? (
           <div className="flex-1 flex items-center justify-center chat-bg">
             <KubIcon name="spinner" size={28} className="text-[color:var(--kub-cyan)]" />
@@ -908,6 +852,81 @@ export function ChatWindow({ chatId }: ChatWindowProps) {
             initialUnreadSince={initialUnreadRef.current?.chatId === chatId ? initialUnreadRef.current.since : null}
           />
         )}
+
+        <div
+          ref={chromeRef}
+          // Over the conversation, not above it. Taken out of the column's flow
+          // so the list can have the whole pane and the glass something to
+          // frost; the list pays it back as padding, measured from this box.
+          //
+          // D-062: last in the column's markup, and that is load-bearing. The
+          // header, the list and the composer are all positioned boxes with
+          // `z-index: auto`, so what paints on top is decided by tree order.
+          // This block used to come first and `order: -1` on the list was what
+          // moved the list underneath it — but `order` only re-orders painting
+          // for flex *items*, and WebKit does not apply it to positioned ones
+          // at all. Measured on Safari 26.4 at 390x844: the topmost element at
+          // the header's centre was a message bubble, the back button's own
+          // centre hit-tested to a bubble, and the header's menu could not be
+          // opened at any width. Nobody could leave a conversation on iPhone.
+          //
+          // Tree order is the only mechanism here that costs nothing else. A
+          // `z-index` on this box, or an `isolation` on the column, would make
+          // a stacking context and clamp every `fixed` overlay hosted in this
+          // subtree — this header's menu and its modals, the composer's camera
+          // and video recorder, a bubble's context menu — inside it; whichever
+          // of the two chrome boxes then lost would have its full-screen dialog
+          // covered by the other. A negative `z-index` on the list is worse: it
+          // stops being the hit-test target, measured false in both engines.
+          //
+          // The cost paid instead is reading order: the conversation is read
+          // before its header. `KubGlassLayer`'s note explains why the header
+          // still keeps a plain `relative` box.
+          className="absolute inset-x-0 top-0 flex flex-col"
+          data-testid="chat-chrome-stack"
+        >
+          <ChatHeader
+            chatId={chatId}
+            chat={chat}
+            onSearchOpen={() => setShowSearch(true)}
+            onInfoOpen={() => setShowInfo(true)}
+            onClearForMe={clearChatForMe}
+            mediaPlayback={<ChatMediaPlaybackBar compact />}
+          />
+
+          {isForum && (
+            <TopicStrip
+              topics={topics}
+              canManage={canManageTopics}
+              onCreate={createTopic}
+            />
+          )}
+
+          {showSearch && (
+            <ChatSearchBar
+              chatId={chatId}
+              currentTopicId={messageTopicId}
+              isForum={isForum}
+              messages={messages}
+              onClose={() => setShowSearch(false)}
+              onJumpTo={handleSearchJump}
+            />
+          )}
+
+          {pinError && (
+            <div className="mx-3 mt-2 rounded-lg border border-[color:var(--kub-border-color)] bg-[var(--kub-surface)] px-3 py-2 text-xs text-[color:var(--kub-muted)]">
+              {pinError}
+            </div>
+          )}
+
+          {pinnedReady && pinnedMessages.length > 0 && (
+            <PinnedMessage
+              messages={pinnedMessages}
+              onJump={handleJumpToPinned}
+              onUnpin={userId ? (msg) => void handleTogglePin(msg) : undefined}
+            />
+          )}
+        </div>
 
         <div
           ref={composerRef}

@@ -314,4 +314,68 @@ test.describe("chat glass layout", () => {
       "the newest message went under the grown composer",
     ).toBeGreaterThanOrEqual(0);
   });
+  test("the way out of the conversation is reachable", async ({ page }) => {
+    await openCapture(page);
+
+    // D-062. The sibling test above asks whether the header is *painted* on
+    // top; this one asks the question the owner actually asked, which is
+    // whether a finger landing on the back button reaches the back button.
+    //
+    // They are not the same assertion, and this is the one that says what the
+    // defect cost: on an iPhone the header is the only way out of a chat, and
+    // for the whole of the glass stage a tap on it went to a message bubble
+    // instead. Chromium passed throughout — `order: -1` on the list moved its
+    // paint position there and does nothing at all in WebKit — so this only
+    // means something while a WebKit project is in the matrix.
+    const reach = await page.evaluate(() => {
+      const chrome = document.querySelector<HTMLElement>('[data-testid="chat-chrome-stack"]');
+      const row = document.querySelector<HTMLElement>('[data-testid="chat-control-row"]');
+      const container = document.querySelector<HTMLElement>('[data-testid="message-scroll-container"]');
+      if (!chrome || !row || !container) throw new Error("the conversation surfaces were not found");
+
+      // Park a bubble under the header first. Against an empty scrollport the
+      // header is trivially reachable and the test proves nothing.
+      const band = row.getBoundingClientRect();
+      const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-message-id]"));
+      const probe = rows[Math.floor(rows.length / 2)];
+      if (!probe) throw new Error("the fixture rendered no messages");
+      const rect = probe.getBoundingClientRect();
+      container.scrollTop += rect.top + rect.height / 2 - (band.top + band.height / 2);
+
+      const hit = (element: Element) => {
+        const box = element.getBoundingClientRect();
+        const node = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return {
+          inside: node ? element.contains(node) : false,
+          landedOnMessage: Boolean(
+            node?.closest("[data-message-id]"),
+          ),
+        };
+      };
+
+      const back = document.querySelector<HTMLElement>('[aria-label="Назад"]');
+      const backVisible = Boolean(back && back.getBoundingClientRect().width > 0);
+      return {
+        // The whole point of running this at all.
+        messageBehindHeader: Array.from(
+          document.elementsFromPoint(band.left + band.width / 2, band.top + band.height / 2),
+        ).some((node) => node instanceof HTMLElement && Boolean(node.dataset.messageId)),
+        row: hit(row),
+        back: backVisible && back ? hit(back) : null,
+      };
+    });
+
+    expect(
+      reach.messageBehindHeader,
+      "no message is behind the header, so reaching it proves nothing",
+    ).toBe(true);
+    expect(reach.row.landedOnMessage, "a tap on the chat header lands on a message bubble").toBe(false);
+    expect(reach.row.inside, "the chat header does not receive a tap on its own centre").toBe(true);
+
+    // Below `md` the back button is rendered and is the only way out.
+    if (reach.back) {
+      expect(reach.back.landedOnMessage, "a tap on the back button lands on a message bubble").toBe(false);
+      expect(reach.back.inside, "the back button does not receive a tap on its own centre").toBe(true);
+    }
+  });
 });

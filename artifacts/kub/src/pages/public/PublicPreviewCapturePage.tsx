@@ -151,6 +151,10 @@ export default function PublicPreviewCapturePage() {
                 of this page is composed from shipping parts — but the geometry
                 has to match, because the scroll contracts are measured here. */}
             <div className="relative flex h-full min-w-0 flex-1 flex-col">
+              {/* The list first, the chrome after it: the three boxes are all
+                  positioned with `z-index: auto`, so the last one in the markup
+                  is the one that paints on top. `ChatWindow` orders them the
+                  same way and for the same reason — see the note there. */}
               <div ref={chromeRef} className="absolute inset-x-0 top-0 flex flex-col" data-testid="chat-chrome-stack">
                 <ChatHeader chatId={activeChat.id} chat={activeChat} />
               </div>

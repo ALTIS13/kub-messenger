@@ -770,21 +770,30 @@ export function MessageList({
     <div
       className="relative flex-1 min-h-0 min-w-0 overflow-hidden"
       style={{
-        // Painted before the chrome that frosts over it.
+        order: -1,
+        // Painted before the chrome that frosts over it, and the mechanism is
+        // this box's position in the markup — nothing in this style.
         //
         // The list runs the full height of the pane, behind the header and the
         // composer, so a blur over either has messages to sample instead of a
-        // flat page. But it sits between them in the DOM, and positioned
-        // siblings with `z-index: auto` paint in tree order, so by default it
-        // covers the header. `order` is the only way to move a flex item's
-        // paint position without a z-index, and a z-index here would make this
-        // box a stacking context and clamp the `fixed` overlays it hosts — the
-        // read-receipts dialog, the selection bar on a phone — inside it. That
-        // is the defect `KubGlassLayer`, `AppTopBar` and `MediaViewer` each
-        // carry a note about; this is the same trap approached from the other
-        // side. Measured: with `order` removed, a relatively positioned message
-        // bubble hit-tests above the header.
-        order: -1,
+        // flat page. All three are positioned boxes with `z-index: auto`, so
+        // the one that paints on top is simply the one that comes last: the
+        // caller must render this list *before* the chrome. `ChatWindow` and
+        // the DEV capture page both do, and `tests/e2e/chat-glass-layout.spec`
+        // measures it in Chromium and WebKit.
+        //
+        // This used to be `order: -1` with the chrome first instead. `order`
+        // moves a flex item's paint position in Chromium, but WebKit does not
+        // apply it to positioned boxes at all — measured on Safari 26.4, the
+        // header was painted under the conversation at every width and the
+        // only way out of a chat on an iPhone could not be tapped (D-062).
+        //
+        // A `z-index` here is not the alternative: it would make this box a
+        // stacking context and clamp the `fixed` overlays it hosts — the
+        // read-receipts dialog, the selection bar on a phone, a bubble's
+        // context menu — inside it. That is the defect `KubGlassLayer`,
+        // `AppTopBar` and `MediaViewer` each carry a note about.
+        //
         // The overlays below hang off this box's edges, and those edges are now
         // under the chrome. They read the insets from here rather than take
         // them as props so the offsets stay in the class that owns them.
