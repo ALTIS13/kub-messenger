@@ -3593,7 +3593,7 @@ edge-to-edge, `innerHeight` is 748 against an 800px screen, and the app never
 draws under the status or gesture bar. The absent `viewport-fit=cover` in
 `artifacts/kub/index.html` therefore costs nothing on this shell.
 
-## D-058 The keyboard takes the newest 266px of the conversation, and nothing takes them back
+## D-058 `[x]` The keyboard takes the newest 266px of the conversation, and nothing takes them back
 
 Found 2026-09-06, first thing, on the most ordinary action a messenger has:
 tapping the composer to reply.
@@ -3663,13 +3663,64 @@ message, with the two before it, goes behind the keyboard. Screenshots:
 `04-keyboard-open.png` is the defect, `05-keyboard-alt.png` the same chat and the
 same keyboard with the list where it should be.
 
-**Not attempted here.** The direction is to observe the scrollport as well as the
-content, but `MessageList` is the most tuned mechanism in this codebase — this
-register already carries 445px, 706px, 1147px and 1233px measurements behind its
-current shape, and D-039 is a whole entry about a correction that made things
-worse. It wants its own task.
+**Fixed** in `MessageList.tsx` by observing the scrollport as well as the
+content, on its **border box**, inside the observer that was already there. The
+guard is deliberately the one that already existed — `isAtBottomRef.current ||
+isInitialBottomLocked()` — because the whole distinction the fix has to keep is
+already written down in it: a reader who was at the bottom is put back at the
+bottom, a reader who was up in the history is left where they are.
 
-## D-059 The light theme cannot be shown on a phone that is in night mode
+Border-box rather than content-box: the scrollport's padding carries
+`bottomInset`, which is the composer's measured height, and a layout effect keyed
+on that already handles it. A content-box observation would fire a second time
+for every composer resize and add nothing.
+
+**Measured on the device with the real IME**, same phone, same chat, same tap on
+the composer:
+
+| | closed | open, before | open, after |
+| --- | --- | --- | --- |
+| `window.innerHeight` | 748 | 482 | 482 |
+| `visualViewport.height` | 748 | 482 | 482 |
+| computed keyboard inset | 0 | 0 | 0 |
+| `--kub-composer-height` | 70px | 70px | 70px |
+| content `scrollHeight` | 4467 | 4467 | 4467 |
+| scrollport `clientHeight` | 748 | 482 | 482 |
+| `scrollTop` | 3719 | 3719 | **3985** |
+| max `scrollTop` | 3719 | 3985 | 3985 |
+| distance from bottom | 0 | **266** | **0** |
+| newest bubble against the composer's top edge | −23.9 | **+242.1** | **−23.9** |
+
+The newest bubble keeps exactly the clearance it had with the keyboard closed.
+Re-verified on the final build against a longer loaded history — 200 rows,
+`scrollHeight` 11328 — where `scrollTop` moves 10580 to 10846, which is the same
+266.
+
+**And the other half, also on the device.** Parked in the history at `scrollTop`
+206 with the scroll-to-bottom button offered, the keyboard was opened: `scrollTop`
+206 afterwards. The reader who did not ask to move was not moved. (The button is
+labelled `К последним сообщениям`; the first pass of this measurement looked for
+the wrong label and reported it absent — it is present whenever the reader is
+away from the bottom, which is exactly why its absence in the defect state was
+the symptom worth recording.)
+
+**Guarded** by `tests/e2e/chat-entry-scroll.spec.ts`, which shrinks the viewport
+height with the width held fixed — nothing rewraps, the content keeps its height,
+only the scrollport loses some, which is the mechanism — in two tests, one for
+each side of the contract. Proven by mutation: deleting the single
+`observer.observe(scrollport, ...)` line (SHA-256 `3ce4381…` to `cce2727…`) fails
+it with `the reader was left 266px from the bottom after the viewport shrank`.
+The source-level half is in `tests/unit/message-history-anchoring.test.mjs`.
+
+**One thing the browser hid, and it is worth knowing.** Measured inside the
+4200ms entry lock the defect looks self-correcting: sampled every frame, the list
+really did sit 266px out and one of the lock's settle timers pulled it back 432ms
+later. The e2e tests wait the lock out for that reason. On the device, where the
+reader has been in the chat longer than four seconds, nothing corrects it — the
+original report of "does not settle, re-read 40s later, unchanged" is what a real
+reader gets.
+
+## D-059 `[x]` The light theme cannot be shown on a phone that is in night mode
 
 Found 2026-09-06 while photographing both themes on the device.
 
@@ -3717,7 +3768,58 @@ this shell.**
 **Consequence:** the light theme is unreachable on a night-mode phone, and the
 darkening is silent — nothing in the DOM says it happened.
 
-## D-060 Justified bubbles open 30px rivers at the width the phone actually has
+**Fixed** in `MainActivity.java`. The call was not missing: it was there, passing
+`true`, under a comment reasoning that "the platform only applies its own
+darkening to content that has no dark styles of its own, and this app has them".
+That is true of the app and false of one of its two themes — a page declaring
+`color-scheme: light` is claiming support for light only, which is precisely the
+case WebView darkens. It now passes `false`.
+
+Nothing is lost by refusing. The flag does not decide what `prefers-color-scheme`
+reports — that follows the activity theme's `isLightTheme`, and the theme is
+still `DayNight` — and the page does not trust that query anyway: measured on
+this phone, `matchMedia("(prefers-color-scheme: dark)")` is **false** while the
+phone is in night mode, both before and after, which is why `publishNightMode`
+exists and why the bootstrap reads `letscube:night` instead.
+
+**Photographed on the device**, phone in night mode throughout (`cmd uimode
+night` reported `yes` before and after and no Android setting was changed),
+`kub-theme` set to `light`, six identical screen points:
+
+| | declared | photographed, before | photographed, after |
+| --- | --- | --- | --- |
+| root class | `h-full light` | — | — |
+| `:root { color-scheme }` | `light` | — | — |
+| `body` background | `rgb(233, 239, 246)` | **`rgb(21, 22, 23)`** | **`rgb(250, 252, 254)`** |
+| hue spread (max − min channel) | — | **2** | 4 |
+
+**And the light theme's contrast, re-measured on this shell** the way rule 7
+requires — text made transparent, the page's own composited pixels decoded,
+worst of three points across each text box:
+
+| | light | dark |
+| --- | --- | --- |
+| message text on its bubble | **18.94:1** | — |
+| date separator, `--kub-muted` on the chat wallpaper | **4.86:1** | **7.86:1** |
+
+The wallpaper composites to `rgb(233, 239, 246)` in the light theme and
+`rgb(6, 12, 26)` in the dark one, which is the product's own palette rather than
+the third appearance the darkening produced. The register's earlier note that
+"every light-theme contrast figure in this document is unverified on this shell"
+is lifted for these; the rest of the light-theme figures were taken in a browser
+and are now measurable here, but were not all re-walked in this pass.
+
+**A measurement trap found doing this, recorded so it is not paid for twice.**
+`adb exec-out screencap` is the whole 720x1600 screen and includes the status
+bar, so a CSS coordinate multiplied by the device pixel ratio lands about 72px
+above where it belongs. The error is silent and it produced a full table of
+identical readings — four different chip fills, an opaque one among them, all
+returning the same wallpaper pixel — which is the only reason it was caught. For
+sampling inside the page, capture the page's own viewport and read the scale back
+from the image. A real screencap stays the right instrument for anything the
+platform does to the page after it is composited, which is what this entry is.
+
+## D-060 `[x]` Justified bubbles open 30px rivers at the width the phone actually has
 
 **Severity:** medium. Every wrapped message, worse the narrower the device.
 
@@ -3748,7 +3850,33 @@ Visible in `07-state.png` and `08-search-jump.png` as the rivers running down
 65%, and justification without hyphenation is doing the opposite of what it was
 chosen for at the width most Android phones have.
 
-## D-061 The six bottom tabs are closer together than the space in their own font
+**Fixed** by removing the justification. `shouldJustifyOrdinaryText` and the
+`[text-align:justify] [text-align-last:start]` pair are gone; message text is
+start-aligned. Not a breakpoint, because there is no width at which it behaves —
+re-measured on the DEV preview fixture with a `Range` over every rendered word,
+on one message chosen to be harsher than the one above:
+
+| viewport | bubble | worst gap, before | × natural | after |
+| --- | --- | --- | --- | --- |
+| 360 | 275.9px | 63.58px | 16.15 | **3.92px (1.00)** |
+| 390 | 305.9px | 52.00px | 13.21 | **3.94px (1.00)** |
+| 412 | 327.9px | 47.55px | 12.08 | **3.92px (1.00)** |
+| 640 | 481.9px | 22.78px | 5.79 | **3.94px (1.00)** |
+| 768 | 249.9px | 39.94px | 10.14 | **3.94px (1.00)** |
+| 1440 | 537.9px | 19.08px | 4.85 | **3.94px (1.00)** |
+
+768 is narrower than 640 because the sidebar appears there and the bubble loses
+the room. The widest bubble the product can draw still opened gaps nearly five
+times a space, so a breakpoint would only have moved the defect to a viewport
+nobody photographs.
+
+**On the device, after:** the worst gap over the fourteen wrapped messages on
+screen is **3.94px, 1.00×**, against **30.16px, 7.66×** on the same phone and the
+same conversation before.
+
+**Guarded** by `tests/unit/narrow-phone-typography.test.mjs`.
+
+## D-061 `[x]` The six bottom tabs are closer together than the space in their own font
 
 **Severity:** low. Every Android phone 360px wide or narrower; cosmetic, and it
 reads as one run of words.
@@ -3773,7 +3901,39 @@ between two words of one sentence, which is why `02-after-login.png` reads
 The touch targets themselves still clear the floor — 44.6px is the narrowest,
 against the 44px rule — but only by 0.6px.
 
-## D-062 Four blurs ride inside the scrolling conversation
+**The mechanism is flex shrink, and it is worth naming.** The six buttons' base
+sizes summed past the row, so they were compressed — and a compressed flex item
+keeps its padding while its content box collapses, so the labels spilled out of
+their own buttons and ended up nearer to each other than the padding should ever
+have allowed. Measured at 360, in a 344px row: the labels total **314.1px** as
+shipped, which leaves 29.9px for six buttons' worth of `px-2`, or 96px of
+padding that cannot be paid.
+
+**Fixed** by making them fit: `px-1` instead of `px-2`, `text-[11px]` instead of
+`text-[12px]`, and no `tracking-wide`. The labels then total **278.5px** and the
+padding survives, which is what puts a floor under the gap that free space cannot
+take away. The uppercase tab voice, the icon size and the 44px minimum are
+unchanged.
+
+**Measured on the device**, and the same numbers in a browser at the same widths:
+
+| viewport | narrowest label gap, before | after | in spaces | narrowest item |
+| --- | --- | --- | --- | --- |
+| **360** | **3.18px** | **10.27px** | 0.95 → **3.71** | 44.6px → 44.0px |
+| 390 | 9.00px | 15.25px | 2.70 → 5.49 | 48.0px → 44.0px |
+| 412 | 13.28px | 18.92px | 3.99 → 6.81 | 50.5px → 44.0px |
+
+No label overflows its button at any of the three widths any more. The narrowest
+touch target is 44.0 x 48.5px, still over the floor — the items are narrower
+because the labels are, and `min-w-[44px]` is what they now rest on rather than
+something they happened to clear.
+
+**Guarded** by `tests/unit/narrow-phone-typography.test.mjs`, which holds the
+padding, the size and the tracking, and also the label set itself: a seventh tab
+or a longer word breaks the same fit from the other side, so the 34 characters
+that were measured to fit are asserted too.
+
+## D-062 `[x]` Four blurs ride inside the scrolling conversation
 
 **Severity:** low, and a contract violation regardless of the number.
 
@@ -3812,6 +3972,47 @@ nothing in the flings dropped a visible frame. Recorded because the contract is
 explicit, because the four sites are cheap to move onto the utilities, and
 because the 21ms figure is the honest cost of the material on a mid-range phone
 and should be known before anything is added to it.
+
+**Fixed** by removing the four blurs. The hand-mixed fills went with them and
+the chips are carried by their borders — `--kub-border-color`, and its pink form
+on the unread separator, which is what carried them before as well: 75-82% of the
+ground composited over the ground is the ground.
+
+**`.kub-raise` was the obvious replacement and it is wrong here.** The veil is
+the right idea — one step above whatever it is laid on, rule 5 — but on a light
+ground it steps DOWN, and `--kub-muted` is not far enough from the page to pay
+for that. Photographed on the device, text made transparent, worst of three
+points across the separator's text box:
+
+| fill under the date separator | light backdrop | light | dark backdrop | dark |
+| --- | --- | --- | --- | --- |
+| as shipped, `--kub-bg` at 75% | `rgb(233, 239, 246)` | 5.00:1 | `rgb(6, 11, 25)` | 8.05:1 |
+| `.kub-raise` | `rgb(219, 226, 235)` | **4.30:1** | `rgb(24, 29, 42)` | 6.68:1 |
+| none, the border alone | `rgb(233, 239, 246)` | **4.86:1** | `rgb(6, 12, 26)` | 7.86:1 |
+
+Rule 10's lesson arriving in a new place — a fill that finally renders can still
+be the wrong one — and its answer is the same one the ops-report callouts got:
+drop the fill, keep the border, which costs nothing and carries the same signal.
+The 0.14 between 5.00 and 4.86 is the wallpaper's dot grid showing through where
+the old fill dimmed it; both clear the floor.
+
+**Measured on the device again afterwards**, eight identical flings over the
+same conversation, three runs each side, medians:
+
+| | janky | 50th | 90th | 95th | 99th | slow UI thread | slow issue draw |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| before | 5.25% | 16ms | 21ms | 25ms | 36ms | 18 | 37 |
+| after | **2.43%** | 17ms | **20ms** | **21ms** | **27ms** | **8** | **17** |
+
+The absolute figures differ from the table above because the fling is a harder
+one — same gesture on both sides, which is what makes them comparable. The
+direction and the size agree with the original measurement: the in-list blur is
+a small, real cost, the 90th percentile barely moves, and what actually improves
+is the tail. Run-to-run spread is wide (4.03-5.26% before, 1.43-4.87% after), so
+the medians are the honest number and a single run is not.
+
+**Guarded** by `tests/unit/shell-glass.test.mjs`, per chip, found by the
+landmark on its wrapper rather than by a line number.
 
 ## Measured on the device, and not a defect
 
@@ -3882,3 +4083,92 @@ repository generates. No credential was typed on the device or passed on a
 command line — the sign-in reads the QA env file inside Node and drives the form
 over CDP. The app's stored theme was set to `light` for D-059 and the key removed
 afterwards, returning it to `system`; no Android setting was changed at any point.
+
+## The matrix now goes down to 360, and why that is the structural finding
+
+Three of the five defects above — D-058, D-060, D-061 — arrived from below 390,
+which is where the release matrix stopped. Not one of them needed a device to
+find; every one of them reproduces in a browser at 360 with the same numbers to
+two decimal places. They were invisible because nothing ever looked.
+
+`360x800` is now in the matrix, in the three places it is written down:
+
+- `playwright.config.ts` as `chromium-mobile-360`, at device scale 2, which is
+  the phone: 720x1600 physical at density 320;
+- `scripts/interface-audit.mjs` as `360x800`;
+- queue item 18 of `docs/PRODUCTION_PRIORITY_TRACKER.md`, which now names six
+  release viewports rather than five.
+
+Two specs that enumerate their own mobile coverage were widened with it:
+`tests/e2e/public-home.spec.ts`, because a public surface making availability
+claims is the last place that should go unchecked at the narrowest width, and
+`tests/e2e/registration-confirmation.spec.ts`.
+
+### What adding it turned up straight away
+
+**The entry spec's sampler was measuring frames that were never painted.** Run
+at 360, `no painted frame shows the list away from the bottom on entry` failed
+about one run in five with readings of 728px and 1092px. It is the instrument,
+not the app, and it is the same instrument error this register already withdrew
+an entry to: `requestAnimationFrame` runs BEFORE style, layout and
+ResizeObserver delivery of its own frame, so a reading taken there is the state
+before the correction that frame is about to make. Measured at 360 over twelve
+entries, with a second ResizeObserver registered after the component's own so
+its callback is delivered after `applyBottomNow` and still before the paint: the
+rAF sampler produced three readings over 40px and the observer reported **zero**,
+in 79 deliveries.
+
+The sampler now records what each frame painted — the last reading taken during
+that frame, whether from the rAF or from the observer, pushed at the start of the
+next one. That makes it strictly stronger rather than more forgiving, and it is
+proven by mutation: deferring `applyBottomNow` by a single frame, which is the
+shape of D-037 and D-038, now fails it with `a frame was painted 4797px from the
+bottom`. It did **not** fail the old sampler, at any viewport — the growth was
+one frame long and the old filter dropped the frames around it.
+
+A first attempt at this weakened the bound instead, by ignoring a reading the
+next frame contradicted. That is wrong and was reverted: the mutation above paints
+exactly one frame 4797px out, and a reader sees it.
+
+**An intermittent worth knowing about.** `content that grows under a pinned list
+is not painted out of place` failed once at `chromium-desktop-1920` with 180px,
+in one full six-project run of 66 tests, and passed 4/4 in isolation and 66/66 on
+the next full run. The test resizes the window from 1920x1080 to 900x900 in one
+step, which is a resize no reader produces and the shape most likely to reach the
+ResizeObserver loop limit — at that limit the remaining notifications are
+deferred to the next frame and the frame really is painted uncorrected. Left as
+it is rather than loosened, and recorded so the next person to see it knows it
+has been seen.
+
+**`registration-confirmation.spec.ts` cannot run in this environment**, at any
+viewport. It fails identically at `chromium-desktop-1440` and
+`chromium-mobile-412` with and without the 360 entry, so it is a missing
+prerequisite of the fixture dev server rather than anything the new project did.
+Its 360 coverage is therefore declared but unproven.
+
+## Evidence for the closures, and what was touched on the device
+
+The measurements above were taken on the same 360-wide phone, through a debug
+build installed over the release one. Both builds were driven the same way: the
+web bundle built by `scripts/build-android-production.mjs`, the WebView reached
+over `adb forward` and CDP, geometry and colour read from the page, and the real
+IME opened by `adb shell input tap` on the composer rather than by focusing the
+field from script — the emulated keyboard is what produced the wrong model the
+first time this was looked at.
+
+Nothing carrying real content was read or printed: only geometry, colours and
+class strings. The session was signed in on the QA owner account through
+`KUB_QA_OWNER_*`, read inside Node from the local env file and typed into the
+form over CDP, so no credential reached a command line. The app's stored theme
+was set to `light` and then to `dark` for the D-059 and D-062 measurements and
+the key was removed afterwards, returning it to `system`. **No Android setting
+was changed**: the phone was already in night mode, `cmd uimode night` reported
+`yes` before and after, and it was only ever read.
+
+The device was returned to the build it started on. The installed release APK was
+pulled before anything else was done (SHA-256
+`7704944572e7c97150e159f3326b65b936fee1d11c0b01d852132423dc509863`) and
+reinstalled at the end; the copy pulled back afterwards has the same hash. A
+debug build cannot be installed over a release one without an uninstall, so the
+application's data was cleared going in and cleared again coming out — the owner
+will need to sign in on the phone again.
