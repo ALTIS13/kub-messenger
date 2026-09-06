@@ -1,6 +1,6 @@
 [package]
 name = "letscube-windows-tauri"
-version = "0.2.11"
+version = "0.2.12"
 description = "LETSCUBE Windows desktop shell"
 authors = ["LETSCUBE"]
 edition = "2021"
