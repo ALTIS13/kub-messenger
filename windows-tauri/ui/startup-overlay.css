@@ -153,9 +153,9 @@
   --node-half: 66px;
   --chassis-inset: 2px;
   --column-shift: 8.5px;
-  --connector-node: 10px;
+  --connector-node: 8px;
   --conduit-height: 4px;
-  --conduit-core: 10px;
+  --conduit-core: 8px;
   --connector-clear: 18px;
   --node-offset: calc(var(--connector-clear) + var(--connector-node) - var(--chassis-inset));
 }
@@ -190,9 +190,8 @@
 .startup-overlay-port {
   position: absolute; z-index: 3;
   width: var(--connector-node); height: var(--connector-node);
-  border: 1.5px solid var(--channel-accent); border-radius: 3px;
+  border: 1px solid var(--channel-accent); border-radius: 2px;
   background: var(--kub-surface-2);
-  box-shadow: 0 0 0 2px var(--kub-bg);
   transition: border-color var(--kub-motion-standard) var(--kub-ease-standard),
               background var(--kub-motion-standard) var(--kub-ease-standard);
 }
@@ -217,30 +216,39 @@
   right: calc(25% - var(--column-shift) + var(--node-half) + var(--node-offset));
   border-radius: 0 999px 999px 0; border-left: 0;
 }
-.startup-overlay-rail i {
-  display: block; width: 100%; height: 100%;
-  background:
-    linear-gradient(90deg,
-      transparent 0%,
-      color-mix(in srgb, var(--channel-accent) 30%, transparent) 38%,
-      color-mix(in srgb, var(--channel-accent) 68%, transparent) 50%,
-      color-mix(in srgb, var(--channel-accent) 30%, transparent) 62%,
-      transparent 100%);
-  background-size: 150px 100%;
+.startup-overlay-rail i { display: block; width: 100%; height: 100%; }
+
+/* See .rail-flow in startup.css: one comet across the whole channel, because a
+   symmetric highlight cannot say which way it travels and two of them in two
+   boxes read as two lights rather than one crossing. */
+.startup-overlay-rail-flow {
+  position: absolute; z-index: 2; pointer-events: none;
+  top: calc(50% - var(--conduit-height) / 2);
+  height: var(--conduit-height); border-radius: 999px;
+  left: calc(25% - var(--column-shift) + var(--device-half) + var(--node-offset));
+  right: calc(25% - var(--column-shift) + var(--node-half) + var(--node-offset));
+  background-image: linear-gradient(90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--channel-accent) 24%, transparent) 58%,
+    var(--channel-accent) 100%);
+  background-size: 130px 100%;
   background-repeat: no-repeat;
-  animation: startup-overlay-conduit-flow calc(var(--kub-motion-standard) * 12) linear infinite;
+  animation: startup-overlay-conduit-flow calc(var(--kub-motion-standard) * 9) linear infinite;
 }
+.is-connected .startup-overlay-rail-flow,
+:host([data-verdict="changed"]) .startup-overlay-rail-flow { display: none; }
 @keyframes startup-overlay-conduit-flow {
-  from { background-position: -150px 0; }
-  to { background-position: calc(100% + 150px) 0; }
+  from { background-position: -130px 0; }
+  to { background-position: calc(100% + 130px) 0; }
 }
 .startup-overlay-seal {
   position: absolute; z-index: 3;
   top: calc(17px - var(--conduit-core) / 2);
   left: 50%; margin-left: calc(-1 * var(--conduit-core) / 2);
   width: var(--conduit-core); height: var(--conduit-core);
-  border: 1px solid var(--kub-border-color); border-radius: 3px;
+  border: 1px solid var(--kub-border-color); border-radius: 2px;
   background: var(--kub-surface-2);
+  box-shadow: 0 0 0 1.5px var(--kub-bg);
   transition: background var(--kub-motion-standard) var(--kub-ease-standard),
               border-color var(--kub-motion-standard) var(--kub-ease-standard),
               box-shadow var(--kub-motion-standard) var(--kub-ease-standard);
@@ -248,15 +256,13 @@
 .is-connected .startup-overlay-rail {
   background: color-mix(in srgb, var(--channel-accent) 28%, transparent);
 }
-.is-connected .startup-overlay-rail i {
-  animation: none;
-  background: var(--channel-accent);
-}
+.is-connected .startup-overlay-rail i { background: var(--channel-accent); }
 .is-connected .startup-overlay-port { background: var(--channel-accent); }
 /* No halo here either — see the note on .center-seal in startup.css. */
 .is-connected .startup-overlay-seal {
   background: var(--channel-accent);
   border-color: var(--channel-accent);
+  box-shadow: none;
 }
 .is-connected .startup-overlay-detail { stroke: var(--verify-accent); }
 
@@ -351,6 +357,6 @@
   }
   /* Both loops removed rather than shortened: at a few milliseconds they are a
      flicker, not a reduction, and neither carries information. */
-  .startup-overlay-rail i { animation: none; }
+  .startup-overlay-rail-flow { animation: none; }
   .startup-overlay-stages li.is-active::after { animation: none; }
 }

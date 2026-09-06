@@ -95,7 +95,7 @@ test("reduced motion stops the loops and collapses the durations", () => {
   // leave them cycling every few milliseconds, which is a flicker rather than a
   // reduction, and neither carries information the scene needs.
   assert.match(block, /\.stages::after \{ animation: none; \}/);
-  assert.match(block, /\.rail i \{ animation: none; \}/);
+  assert.match(block, /\.rail-flow \{ animation: none; \}/);
 });
 
 test("the scene still invents no progress of its own", () => {

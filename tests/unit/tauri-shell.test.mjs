@@ -536,11 +536,24 @@ test("Windows startup uses one main window and a local approved handshake scene"
     /\.rail\s*\{[^}]*(?:border\s*:|backdrop-filter)/s,
     "the channel stays flat: an outlined, frosted tube is what dated this assembly",
   );
-  assert.doesNotMatch(
-    cssBody,
-    /\.handshake\.is-connected \.center-seal\s*\{[^}]*box-shadow/s,
-    "no halo on the junction — it was the loudest thing left on the screen",
-  );
+  // `none` is allowed and is in fact required: a sealed handshake reads as one
+  // continuous line, so the junction drops the ring that keeps it legible
+  // while the handshake is still open. What is forbidden is a ring — the 4px
+  // glow this once had was the loudest thing left on the screen.
+  //
+  // Read the value out and compare it, rather than a negative lookahead: with
+  // `box-shadow:\s*(?!none)` the \s* matches zero characters, the lookahead
+  // then reads the space rather than the value, and the assertion passes on
+  // the very declaration it exists to forbid. Measured, not assumed.
+  {
+    const sealBlock = cssBody.match(/\.handshake\.is-connected \.center-seal\s*\{([^}]*)\}/s);
+    assert.ok(sealBlock, "the connected junction rule is missing");
+    const shadow = sealBlock[1].match(/box-shadow:\s*([^;]+);/);
+    assert.ok(
+      !shadow || shadow[1].trim() === "none",
+      `the junction may only clear its ring when connected, never grow one — found "${shadow?.[1].trim()}"`,
+    );
+  }
   // Every panel on this screen is the same material, and none of them is
   // opaque. A surface that stops sampling the scene behind it stops being a
   // surface and becomes a flat patch of a slightly different colour, which is
@@ -586,7 +599,7 @@ test("Windows startup uses one main window and a local approved handshake scene"
     "the channel must show the state of the channel, not the stage the shell is on",
   );
   // Movement along the channel is one of its three states, so it has to stop.
-  assert.match(css, /prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.rail i \{ animation: none; \}/);
+  assert.match(css, /prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.rail-flow \{ animation: none; \}/);
 
   // -- The stage track --------------------------------------------------------
   // Two rebuilds sit behind this. It was first four 4px bars with 10px gaps,

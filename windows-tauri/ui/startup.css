@@ -349,9 +349,9 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
      thing into a stepper); only the weight comes down, to the same 4px the
      stage track uses, so the two indicators on this screen finally speak the
      same language. */
-  --connector-node: 10px;   /* the two sockets, one size */
+  --connector-node: 8px;    /* the two sockets, one size */
   --conduit-height: 4px;    /* a line, matching --track-height */
-  --conduit-core: 10px;     /* the junction that caps both halves */
+  --conduit-core: 8px;      /* the junction that caps both halves */
   --connector-clear: 18px;  /* drawn chassis edge to node, both sides alike */
   /* Distance from a device box's edge out to the far side of its node. */
   --node-offset: calc(var(--connector-clear) + var(--connector-node) - var(--chassis-inset));
@@ -365,12 +365,13 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
 .connection-port {
   position: absolute; z-index: 3;
   width: var(--connector-node); height: var(--connector-node);
-  border: 1.5px solid var(--channel-accent); border-radius: 3px;
+  border: 1px solid var(--channel-accent); border-radius: 2px;
   background: var(--kub-surface-2);
-  /* The ring is the page's own colour so the socket reads as punched through
-     the channel rather than laid on top of it. It stays, at 2px: without it a
-     socket sitting on the line reads as a lump in the line. */
-  box-shadow: 0 0 0 2px var(--kub-bg);
+  /* No ring. The ring existed to punch the socket out of the channel it sat
+     on, but these two sit at the ENDS of the line, not on it — so all it did
+     was add 6px of page colour around an 8px box and make the socket read as
+     a bead threaded onto a wire. The junction below still has one: that one
+     does interrupt the line. */
   transition: border-color var(--kub-motion-standard) var(--kub-ease-standard),
               background var(--kub-motion-standard) var(--kub-ease-standard);
 }
@@ -416,25 +417,44 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
   right: calc(25% - var(--column-shift) + var(--node-half) + var(--node-offset));
   border-radius: 0 999px 999px 0; border-left: 0;
 }
-/* Traffic: a highlight travelling the length of the channel, left to right,
-   from this computer towards the node. It moves a gradient inside a box whose
-   size never changes, so nothing is laid out again while it runs. */
-.rail i {
-  display: block; width: 100%; height: 100%;
-  background:
-    linear-gradient(90deg,
-      transparent 0%,
-      color-mix(in srgb, var(--channel-accent) 30%, transparent) 38%,
-      color-mix(in srgb, var(--channel-accent) 68%, transparent) 50%,
-      color-mix(in srgb, var(--channel-accent) 30%, transparent) 62%,
-      transparent 100%);
-  background-size: 150px 100%;
+/* The static layer inside each half. It carries the connected state's fill and
+   nothing else; the traffic is drawn by .rail-flow below. */
+.rail i { display: block; width: 100%; height: 100%; }
+
+/* Traffic: one highlight crossing the whole channel, from this computer
+   towards the node.
+ *
+ * Two things about the version this replaces made its direction unreadable,
+ * and the owner said so plainly. Its gradient was symmetric — transparent,
+ * bright, transparent — and a symmetric shape in motion cannot say which way
+ * it is going; and it was drawn per half, so two lights ran in two boxes in
+ * different phases rather than one crossing the span.
+ *
+ * So: one element spanning socket to socket, and a comet — a bright leading
+ * edge with the tail fading behind it. The direction is legible from a still
+ * frame, which is the test that matters.
+ */
+.rail-flow {
+  position: absolute; z-index: 2; pointer-events: none;
+  top: calc(50% - var(--conduit-height) / 2);
+  height: var(--conduit-height); border-radius: 999px;
+  left: calc(25% - var(--column-shift) + var(--device-half) + var(--node-offset));
+  right: calc(25% - var(--column-shift) + var(--node-half) + var(--node-offset));
+  background-image: linear-gradient(90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--channel-accent) 24%, transparent) 58%,
+    var(--channel-accent) 100%);
+  background-size: 130px 100%;
   background-repeat: no-repeat;
-  animation: conduit-flow calc(var(--kub-motion-standard) * 12) linear infinite;
+  animation: conduit-flow calc(var(--kub-motion-standard) * 9) linear infinite;
 }
+/* Confirmed or halted: nothing is in flight, so nothing moves. */
+.handshake.is-connected .rail-flow,
+body[data-verdict="changed"] .rail-flow,
+body[data-verdict="failed"] .rail-flow { display: none; }
 @keyframes conduit-flow {
-  from { background-position: -150px 0; }
-  to { background-position: calc(100% + 150px) 0; }
+  from { background-position: -130px 0; }
+  to { background-position: calc(100% + 130px) 0; }
 }
 
 /* The junction joining the two halves. Same height as the channel, so the tube
@@ -444,8 +464,9 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
   top: calc(17px - var(--conduit-core) / 2);
   left: 50%; margin-left: calc(-1 * var(--conduit-core) / 2);
   width: var(--conduit-core); height: var(--conduit-core);
-  border: 1px solid var(--kub-border-color); border-radius: 3px;
+  border: 1px solid var(--kub-border-color); border-radius: 2px;
   background: var(--kub-surface-2);
+  box-shadow: 0 0 0 1.5px var(--kub-bg);
   transition: background var(--kub-motion-standard) var(--kub-ease-standard),
               border-color var(--kub-motion-standard) var(--kub-ease-standard);
 }
@@ -455,16 +476,14 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
   background: color-mix(in srgb, var(--channel-accent) 28%, transparent);
 }
 /* A full line, standing still: the channel is up and nothing is in flight. */
-.handshake.is-connected .rail i {
-  animation: none;
-  background: var(--channel-accent);
-}
-/* No halo. A ring around a 10px joint on a 4px line is most of the object's
-   visual mass spent on decoration, and it was the loudest thing on the
-   screen once everything around it came down to a hairline. */
+.handshake.is-connected .rail i { background: var(--channel-accent); }
+/* No halo. A 4px glow ring around the joint was most of that object's visual
+   mass spent on decoration, and the loudest thing left on the screen once
+   everything around it came down to a hairline. */
 .handshake.is-connected .center-seal {
   background: var(--channel-accent);
   border-color: var(--channel-accent);
+  box-shadow: none;
 }
 
 /* The fingerprint did not match, or nothing connected at all: the channel is
@@ -472,11 +491,10 @@ body[data-verdict="changed"] .fingerprint-label { color: var(--kub-danger); }
    second, so the alarm is spent on the security finding only. */
 body[data-verdict="changed"] .rail,
 body[data-verdict="failed"] .rail {
-  background: var(--kub-bg);
-  border-color: color-mix(in srgb, var(--channel-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--channel-accent) 22%, transparent);
 }
 body[data-verdict="changed"] .rail i,
-body[data-verdict="failed"] .rail i { animation: none; background: none; }
+body[data-verdict="failed"] .rail i { background: none; }
 body[data-verdict="failed"] .center-seal {
   background: var(--kub-bg);
   border-color: color-mix(in srgb, var(--channel-accent) 70%, transparent);
@@ -767,7 +785,7 @@ button.is-quiet:hover { background: var(--kub-surface-3); color: var(--kub-text)
      the sequence has got, and the channel's colour says what state it is in,
      and both of those still read standing still. */
   .stages::after { animation: none; }
-  .rail i { animation: none; }
+  .rail-flow { animation: none; }
   /* The hint still opens and still waits before opening — a delay is not
      motion. What goes is the scale, which is. */
   .hint,
