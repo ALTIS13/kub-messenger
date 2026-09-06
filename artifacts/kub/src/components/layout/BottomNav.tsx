@@ -70,12 +70,25 @@ export function BottomNav() {
             aria-label={label}
             aria-current={isActive ? "page" : undefined}
             className={cn(
-              "relative flex flex-col items-center gap-0.5 min-w-[44px] min-h-[44px] px-2 py-1 rounded-xl transition-colors",
+              // `px-1`, not `px-2`, and the padding is the whole fix.
+              //
+              // D-061: with six tabs at 360px the buttons' base sizes summed to
+              // more than the row, so flex shrank them, and a shrunk flex item
+              // keeps its padding while its content box collapses — the labels
+              // spilled out of their own buttons and ended up 3.2px apart, in a
+              // font whose space measures 3.3px. They read as one phrase.
+              //
+              // Measured at 360: the six labels total 314.1px as shipped
+              // against 344px of row, so 8px of padding per side could not be
+              // paid. At 11px without the extra tracking they total 278.5px,
+              // which leaves the padding intact — and intact padding is a floor
+              // under the gap that free space cannot take away.
+              "relative flex flex-col items-center gap-0.5 min-w-[44px] min-h-[44px] px-1 py-1 rounded-xl transition-colors",
               isActive ? "text-[color:var(--kub-accent-text)]" : "text-[color:var(--kub-muted)]"
             )}
           >
             <KubIcon name={icon} size={22} />
-            <span className="text-[12px] font-semibold uppercase tracking-wide">{label}</span>
+            <span className="text-[11px] font-semibold uppercase">{label}</span>
             {isActive && (
               <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-[var(--kub-cyan)] kub-glow-soft" />
             )}

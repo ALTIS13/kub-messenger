@@ -213,18 +213,31 @@ function getCompactReplyPreviewCap(replyBody: string): { chars: number; maxWidth
   return { chars: 16, maxWidth: "min(100%, 124px, 16ch)" };
 }
 
-function shouldJustifyOrdinaryText(content: string): boolean {
-  const text = content.replace(/\s+/g, " ").trim();
-  if (!text || isLocationPreviewMessage(content) || /\bhttps?:\/\/\S+/.test(text) || /```[\s\S]*```/.test(content)) {
-    return false;
-  }
-
-  const words = text.split(/\s+/).filter(Boolean);
-  const longestToken = words.reduce((max, token) => Math.max(max, token.length), 0);
-  if (longestToken >= 34 || words.length < 10 || text.length < 72) return false;
-
-  return true;
-}
+/*
+ * Message text is start-aligned. It was justified, and D-060 is why it is not.
+ *
+ * Justification moves a line's slack into its word spaces, and it can only give
+ * that slack somewhere else if the text hyphenates. Russian prose here does not:
+ * the bubble carried `hyphens: manual`, and no engine hyphenates on its own
+ * without being asked. So every line paid for the one long word it could not
+ * break, and the narrower the column the more it paid.
+ *
+ * Measured on the DEV preview fixture with a `Range` over each word, worst gap
+ * per rendered message against a natural space of 3.94px in this font at 14px:
+ *
+ *   viewport   bubble    worst gap   × natural
+ *   360        275.9px   63.58px     16.15
+ *   390        305.9px   52.00px     13.21
+ *   412        327.9px   47.55px     12.08
+ *   640        481.9px   22.78px      5.79
+ *   768        249.9px   39.94px     10.14   (the sidebar appears; the bubble narrows)
+ *   1440       537.9px   19.08px      4.85
+ *
+ * There is no width where it behaves — the widest bubble the product can show
+ * still opens gaps nearly five times a space — so this is removed rather than
+ * gated behind a breakpoint. The register's own numbers, taken on a real device
+ * against a different message, agree: 7.76× at 360 and 3.48× at 412.
+ */
 
 /**
  * What to render before anything has been measured.
@@ -1029,11 +1042,6 @@ export function MessageBubble({
   const contextItems = isLocalSend ? localSendContextItems : regularContextItems;
   const canUseCompactReplyInline = canRenderCompactReplyInline(message, textLayoutKind, hasReactions);
   const canUseMeasuredTextMeta = message.type === "text" && textLayoutKind !== "preformatted" && !message.failed && !canUseCompactReplyInline;
-  const justifyOrdinaryText =
-    textLayoutKind === "regular" &&
-    !message.reply_to_id &&
-    !hasReactions &&
-    shouldJustifyOrdinaryText(message.content ?? "");
   const footerMode = hasReactions ? "bottom-layer-reactions" : canUseCompactReplyInline ? "compact-reply-inline" : canUseMeasuredTextMeta ? "measured" : "meta-row";
   const showGroupReadIndicator = Boolean(groupReadInfo && groupReadInfo.readCount > 0);
   const groupReadLabel = groupReadInfo ? getGroupReadReceiptCompactLabel(groupReadInfo) : "";
@@ -1601,7 +1609,6 @@ export function MessageBubble({
                 content={message.content ?? ""}
                 textClassName={cn(
                   "min-w-0 max-w-full text-sm leading-relaxed whitespace-pre-wrap text-[color:var(--kub-text)]",
-                  justifyOrdinaryText && "[text-align:justify] [text-align-last:start]",
                   widthClasses.text
                 )}
                 meta={hasReactions ? null : renderFooterContent()}
